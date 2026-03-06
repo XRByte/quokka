@@ -73,7 +73,6 @@ namespace filesystem = experimental::filesystem;
 
 #include "SimulationData.hpp"
 #include "chemistry/Chemistry.hpp"
-#include "radiation/photochemistry.hpp"
 #include "cooling/ResampledCooling.hpp"
 #include "dust/DustDrag.hpp"
 #include "dust/dust_system.hpp"
@@ -83,6 +82,7 @@ namespace filesystem = experimental::filesystem;
 #include "hyperbolic_system.hpp"
 #include "physics_info.hpp"
 #include "physics_numVars.hpp"
+#include "radiation/photochemistry.hpp"
 #include "radiation/radiation_system.hpp"
 #include "simulation.hpp"
 #include "turbulence/TurbulentDriving.hpp"
