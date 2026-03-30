@@ -5,6 +5,7 @@ last_chk
 compile_commands.json
 .vscode/
 codeql-db/
+.zed/
 build/
 build_lint/
 docs/doxygen/
