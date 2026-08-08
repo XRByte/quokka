@@ -14,7 +14,7 @@
 #include "math/interpolate.hpp"
 #include "radiation/radiation_system.hpp"
 #include "util/BC.hpp"
-#include <fmt/format.h>
+#include <format>
 #include <fstream>
 
 #include "QuokkaSimulation.hpp"
@@ -44,19 +44,10 @@ template <> struct RadSystem_Traits<SuOlsonProblemCgs> {
 	static constexpr int beta_order = 0;
 };
 
-template <> struct Physics_Traits<SuOlsonProblemCgs> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<SuOlsonProblemCgs> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = false;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
-	// face-centred
-	static constexpr bool is_mhd_enabled = false;
-	static constexpr int nGroups = 1; // number of radiation groups
-	static constexpr UnitSystem unit_system = UnitSystem::CGS;
 };
 
 template <> AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE auto RadSystem<SuOlsonProblemCgs>::ComputePlanckOpacity(const double rho, const double Tgas) -> amrex::Real
@@ -82,18 +73,7 @@ AMRSimulation<SuOlsonProblemCgs>::setCustomBoundaryConditions(const amrex::IntVe
 							      int /*numcomp*/, amrex::GeometryData const & /*geom*/, const amrex::Real /*time*/,
 							      const amrex::BCRec * /*bcr*/, int /*bcomp*/, int /*orig_comp*/)
 {
-#if (AMREX_SPACEDIM == 1)
-	auto i = iv.toArray()[0];
-	int j = 0;
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 2)
-	auto [i, j] = iv.toArray();
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 3)
-	auto [i, j, k] = iv.toArray();
-#endif
+	auto const [i, j, k] = iv.dim3();
 
 	// This boundary condition is only first-order accurate!
 	// (Not quite good enough for simulating an optically-thick Marshak wave;
@@ -333,7 +313,7 @@ auto problem_main() -> int
 	matplotlibcpp::xlabel("length x (cm)");
 	matplotlibcpp::ylabel("temperature (keV)");
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("time t = {:.4g}", sim.tNew_[0]));
+	matplotlibcpp::title(std::format("time t = {:.4g}", sim.tNew_[0]));
 	if (use_wavespeed_correction) {
 		matplotlibcpp::save("./marshak_wave_asymptotic_correction_gastemperature.pdf");
 	} else {

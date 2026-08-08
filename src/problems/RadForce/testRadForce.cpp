@@ -13,7 +13,7 @@
 #include "radiation/radiation_system.hpp"
 #include "util/BC.hpp"
 #include <cstdint>
-#include <fmt/format.h>
+#include <format>
 #include <string>
 
 #include "AMReX.H"
@@ -56,20 +56,12 @@ template <> struct quokka::EOS_Traits<TubeProblem> {
 	static constexpr double cs_isothermal = a0; // only used when gamma = 1
 };
 
-template <> struct Physics_Traits<TubeProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<TubeProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = true;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
 	// face-centred
-	static constexpr bool is_mhd_enabled = false;
 	// number of radiation groups
-	static constexpr int nGroups = 1;
-	static constexpr UnitSystem unit_system = UnitSystem::CGS;
 };
 
 template <> struct RadSystem_Traits<TubeProblem> {
@@ -125,51 +117,40 @@ AMRSimulation<TubeProblem>::setCustomBoundaryConditions(const amrex::IntVect &iv
 							amrex::GeometryData const &geom, const amrex::Real /*time*/, const amrex::BCRec * /*bcr*/,
 							int /*bcomp*/, int /*orig_comp*/)
 {
-#if (AMREX_SPACEDIM == 1)
-	auto i = iv.toArray()[0];
-	int j = 0;
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 2)
-	auto [i, j] = iv.toArray();
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 3)
-	auto [i, j, k] = iv.toArray();
-#endif
-
-	amrex::Box const &box = geom.Domain();
-	amrex::GpuArray<int, 3> lo = box.loVect3d();
+	// Number of variables (use Physics_Indices which correctly accounts for enabled physics)
+	constexpr int nvar = Physics_Indices<TubeProblem>::nvarTotal_cc;
 
 	amrex::Real const Erad = Frad0 / c_light_cgs_;
 	amrex::Real const Frad = Frad0;
-	amrex::Real rho = NAN;
-	amrex::Real vel = NAN;
+	amrex::Real const rho = rho0;
+	amrex::Real const vel = Mach0 * a0;
 
 	quokka::valarray<amrex::Real, Physics_Traits<TubeProblem>::nGroups> radEnergyFractions{};
 	for (int g = 0; g < Physics_Traits<TubeProblem>::nGroups; ++g) {
 		radEnergyFractions[g] = 1.0 / Physics_Traits<TubeProblem>::nGroups;
 	}
 
-	if (i < lo[0]) {
-		// left side
-		rho = rho0;
-		vel = Mach0 * a0;
-		// Dirichlet
-		for (int g = 0; g < Physics_Traits<TubeProblem>::nGroups; ++g) {
-			consVar(i, j, k, RadSystem<TubeProblem>::radEnergy_index + Physics_NumVars::numRadVarsPerGroup * g) = Erad * radEnergyFractions[g];
-			consVar(i, j, k, RadSystem<TubeProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = Frad * radEnergyFractions[g];
-			consVar(i, j, k, RadSystem<TubeProblem>::x2RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = 0.;
-			consVar(i, j, k, RadSystem<TubeProblem>::x3RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = 0.;
-		}
+	// Prepare left boundary values
+	amrex::GpuArray<amrex::Real, nvar> low_bdr_cells{};
 
-		consVar(i, j, k, RadSystem<TubeProblem>::gasDensity_index) = rho;
-		consVar(i, j, k, RadSystem<TubeProblem>::gasEnergy_index) = 0.;
-		consVar(i, j, k, RadSystem<TubeProblem>::gasInternalEnergy_index) = 0.;
-		consVar(i, j, k, RadSystem<TubeProblem>::x1GasMomentum_index) = rho * vel;
-		consVar(i, j, k, RadSystem<TubeProblem>::x2GasMomentum_index) = 0.;
-		consVar(i, j, k, RadSystem<TubeProblem>::x3GasMomentum_index) = 0.;
+	// Set specific values for radiation groups
+	for (int g = 0; g < Physics_Traits<TubeProblem>::nGroups; ++g) {
+		low_bdr_cells[RadSystem<TubeProblem>::radEnergy_index + Physics_NumVars::numRadVarsPerGroup * g] = Erad * radEnergyFractions[g];
+		low_bdr_cells[RadSystem<TubeProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = Frad * radEnergyFractions[g];
+		low_bdr_cells[RadSystem<TubeProblem>::x2RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0.;
+		low_bdr_cells[RadSystem<TubeProblem>::x3RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0.;
 	}
+
+	// Set gas variables
+	low_bdr_cells[RadSystem<TubeProblem>::gasDensity_index] = rho;
+	low_bdr_cells[RadSystem<TubeProblem>::gasEnergy_index] = 0.;
+	low_bdr_cells[RadSystem<TubeProblem>::gasInternalEnergy_index] = 0.;
+	low_bdr_cells[RadSystem<TubeProblem>::x1GasMomentum_index] = rho * vel;
+	low_bdr_cells[RadSystem<TubeProblem>::x2GasMomentum_index] = 0.;
+	low_bdr_cells[RadSystem<TubeProblem>::x3GasMomentum_index] = 0.;
+
+	// Apply boundary condition using helper function (direction 0 = x-axis)
+	setConstantDirichletBCLo<0>(iv, consVar, geom, low_bdr_cells);
 }
 
 auto problem_main() -> int
@@ -299,7 +280,7 @@ auto problem_main() -> int
 	matplotlibcpp::plot(x_exact_scaled, rho_exact, rhoexact_args);
 	matplotlibcpp::scatter(xs, rho_arr, 1.0, rho_args);
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("t = {:.4g} s", sim.tNew_[0]));
+	matplotlibcpp::title(std::format("t = {:.4g} s", sim.tNew_[0]));
 	matplotlibcpp::xlabel("x (cm)");
 	matplotlibcpp::ylabel("density");
 	matplotlibcpp::tight_layout();
@@ -318,7 +299,7 @@ auto problem_main() -> int
 	matplotlibcpp::plot(x_exact_scaled, Mach_exact, vx_exact_args);
 	matplotlibcpp::scatter(strided_vector_from(xs, s), strided_vector_from(Mach_arr, s), 10.0, vx_args);
 	matplotlibcpp::legend();
-	// matplotlibcpp::title(fmt::format("t = {:.4g} s", sim.tNew_[0]));
+	// matplotlibcpp::title(std::format("t = {:.4g} s", sim.tNew_[0]));
 	matplotlibcpp::xlabel("length x (cm)");
 	matplotlibcpp::ylabel("Mach number");
 	matplotlibcpp::tight_layout();

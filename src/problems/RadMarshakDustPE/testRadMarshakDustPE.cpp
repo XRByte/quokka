@@ -12,11 +12,12 @@
 #endif
 #include "AMReX.H"
 #include "QuokkaSimulation.hpp"
+#include "physics_info.hpp"
 #include "radiation/radiation_dust_system.hpp"
 #include "util/BC.hpp"
 #include "util/fextract.hpp"
 #include "util/valarray.hpp"
-#include <fmt/format.h>
+#include <format>
 
 struct MarshakProblem {
 };
@@ -50,17 +51,11 @@ template <> struct quokka::EOS_Traits<MarshakProblem> {
 	static constexpr double gamma = 5. / 3.;
 };
 
-template <> struct Physics_Traits<MarshakProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<MarshakProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = false;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
 	// face-centred
-	static constexpr bool is_mhd_enabled = false;
 	static constexpr int nGroups = n_group_; // number of radiation groups
 	static constexpr UnitSystem unit_system = UnitSystem::CONSTANTS;
 	static constexpr double boltzmann_constant = 1.0;
@@ -145,47 +140,37 @@ AMRSimulation<MarshakProblem>::setCustomBoundaryConditions(const amrex::IntVect 
 							   amrex::GeometryData const &geom, const amrex::Real /*time*/, const amrex::BCRec * /*bcr*/,
 							   int /*bcomp*/, int /*orig_comp*/)
 {
-#if (AMREX_SPACEDIM == 1)
-	auto i = iv.toArray()[0];
-	int j = 0;
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 2)
-	auto [i, j] = iv.toArray();
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 3)
-	auto [i, j, k] = iv.toArray();
-#endif
-
-	amrex::Box const &box = geom.Domain();
-	amrex::GpuArray<int, 3> lo = box.loVect3d();
+	// Number of variables (use Physics_Indices which correctly accounts for enabled physics)
+	constexpr int nvar = Physics_Indices<MarshakProblem>::nvarTotal_cc;
 
 	// const auto Erads = RadSystem<MarshakProblem>::ComputeThermalRadiation(T_rad_L, radBoundaries_);
 	quokka::valarray<double, 2> const Erads = {erad_floor, EradL};
 	const double c_light = c;
 	const auto Frads = Erads * c_light;
 
-	if (i < lo[0]) {
-		// streaming inflow boundary
-		// multigroup radiation
-		// x1 left side boundary (Marshak)
-		for (int g = 0; g < Physics_Traits<MarshakProblem>::nGroups; ++g) {
-			consVar(i, j, k, RadSystem<MarshakProblem>::radEnergy_index + Physics_NumVars::numRadVarsPerGroup * g) = Erads[g];
-			consVar(i, j, k, RadSystem<MarshakProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = Frads[g];
-			consVar(i, j, k, RadSystem<MarshakProblem>::x2RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = 0;
-			consVar(i, j, k, RadSystem<MarshakProblem>::x3RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = 0;
-		}
+	// Prepare left boundary values
+	amrex::GpuArray<amrex::Real, nvar> low_bdr_cells{};
+	// Initialize all to 0 first
+
+	// Set specific radiation values
+	for (int g = 0; g < Physics_Traits<MarshakProblem>::nGroups; ++g) {
+		low_bdr_cells[RadSystem<MarshakProblem>::radEnergy_index + Physics_NumVars::numRadVarsPerGroup * g] = Erads[g];
+		low_bdr_cells[RadSystem<MarshakProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = Frads[g];
+		low_bdr_cells[RadSystem<MarshakProblem>::x2RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0;
+		low_bdr_cells[RadSystem<MarshakProblem>::x3RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0;
 	}
 
-	// gas boundary conditions are the same everywhere
+	// Set gas values
 	const double Egas = initial_T * CV;
-	consVar(i, j, k, RadSystem<MarshakProblem>::gasEnergy_index) = Egas;
-	consVar(i, j, k, RadSystem<MarshakProblem>::gasDensity_index) = rho0;
-	consVar(i, j, k, RadSystem<MarshakProblem>::gasInternalEnergy_index) = Egas;
-	consVar(i, j, k, RadSystem<MarshakProblem>::x1GasMomentum_index) = 0.;
-	consVar(i, j, k, RadSystem<MarshakProblem>::x2GasMomentum_index) = 0.;
-	consVar(i, j, k, RadSystem<MarshakProblem>::x3GasMomentum_index) = 0.;
+	low_bdr_cells[RadSystem<MarshakProblem>::gasEnergy_index] = Egas;
+	low_bdr_cells[RadSystem<MarshakProblem>::gasDensity_index] = rho0;
+	low_bdr_cells[RadSystem<MarshakProblem>::gasInternalEnergy_index] = Egas;
+	low_bdr_cells[RadSystem<MarshakProblem>::x1GasMomentum_index] = 0.;
+	low_bdr_cells[RadSystem<MarshakProblem>::x2GasMomentum_index] = 0.;
+	low_bdr_cells[RadSystem<MarshakProblem>::x3GasMomentum_index] = 0.;
+
+	// Apply boundary condition using helper function (direction 0 = x-axis)
+	setConstantDirichletBCLo<0>(iv, consVar, geom, low_bdr_cells);
 }
 
 auto problem_main() -> int
@@ -296,7 +281,7 @@ auto problem_main() -> int
 	matplotlibcpp::xlabel("x");
 	matplotlibcpp::ylabel("E_rad_group1");
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("Marshak_dust test at t = {:.1f}", sim.tNew_[0]));
+	matplotlibcpp::title(std::format("Marshak_dust test at t = {:.1f}", sim.tNew_[0]));
 	matplotlibcpp::tight_layout();
 	if (is_coupled) {
 		matplotlibcpp::save("./radiation_marshak_dust_PE_coupled_Erad1.pdf");
@@ -313,7 +298,7 @@ auto problem_main() -> int
 		matplotlibcpp::xlabel("x");
 		matplotlibcpp::ylabel("E_rad_group2");
 		matplotlibcpp::legend();
-		matplotlibcpp::title(fmt::format("Marshak_dust test at t = {:.1f}", sim.tNew_[0]));
+		matplotlibcpp::title(std::format("Marshak_dust test at t = {:.1f}", sim.tNew_[0]));
 		matplotlibcpp::tight_layout();
 		if (is_coupled) {
 			matplotlibcpp::save("./radiation_marshak_dust_PE_coupled_Erad2.pdf");
@@ -330,7 +315,7 @@ auto problem_main() -> int
 	matplotlibcpp::xlabel("x");
 	matplotlibcpp::ylabel("Temperature");
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("Marshak_dust test at t = {:.1f}", sim.tNew_[0]));
+	matplotlibcpp::title(std::format("Marshak_dust test at t = {:.1f}", sim.tNew_[0]));
 	matplotlibcpp::tight_layout();
 	if (is_coupled) {
 		matplotlibcpp::save("./radiation_marshak_dust_PE_coupled_temperature.pdf");

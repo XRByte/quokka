@@ -13,7 +13,7 @@
 #include "radiation/radiation_system.hpp"
 #include "util/BC.hpp"
 #include "util/fextract.hpp"
-#include <fmt/format.h>
+#include <format>
 #include <fstream>
 
 struct PulseProblem {
@@ -68,18 +68,11 @@ template <> struct RadSystem_Traits<PulseProblem> {
 	static constexpr int beta_order = beta_order_;
 };
 
-template <> struct Physics_Traits<PulseProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<PulseProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = true;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
 	// face-centred
-	static constexpr bool is_mhd_enabled = false;
-	static constexpr int nGroups = 1;
 	static constexpr UnitSystem unit_system = UnitSystem::CONSTANTS;
 	static constexpr double boltzmann_constant = k_B;
 	static constexpr double c_light = c;
@@ -248,7 +241,7 @@ auto problem_main() -> int
 	matplotlibcpp::xlabel("x (dimensionless)");
 	matplotlibcpp::ylabel("temperature (dimensionless)");
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("time ct = {:.4g}", sim.tNew_[0] * c));
+	matplotlibcpp::title(std::format("time ct = {:.4g}", sim.tNew_[0] * c));
 	if constexpr (beta_order_ == 1) {
 		matplotlibcpp::ylim(1.0 - 1.0e-7, 1.0 + 1.0e-7);
 	}
@@ -267,7 +260,7 @@ auto problem_main() -> int
 	matplotlibcpp::xlabel("length x (dimensionless)");
 	matplotlibcpp::ylabel("v / v0 (dimensionless)");
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("time ct = {:.4g}", sim.tNew_[0] * c));
+	matplotlibcpp::title(std::format("time ct = {:.4g}", sim.tNew_[0] * c));
 	matplotlibcpp::tight_layout();
 	matplotlibcpp::save("./radhydro_uniform_advecting_velocity_dimensionless.pdf");
 #endif

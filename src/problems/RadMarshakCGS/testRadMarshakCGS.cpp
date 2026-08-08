@@ -17,7 +17,7 @@
 #include "math/interpolate.hpp"
 #include "radiation/radiation_system.hpp"
 #include "util/BC.hpp"
-#include <fmt/format.h>
+#include <format>
 #include <fstream>
 
 #include "radiation/radiation_system.hpp"
@@ -51,19 +51,10 @@ template <> struct RadSystem_Traits<SuOlsonProblemCgs> {
 	static constexpr int beta_order = 1;
 };
 
-template <> struct Physics_Traits<SuOlsonProblemCgs> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<SuOlsonProblemCgs> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = false;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
-	// face-centred
-	static constexpr bool is_mhd_enabled = false;
-	static constexpr int nGroups = 1; // number of radiation groups
-	static constexpr UnitSystem unit_system = UnitSystem::CGS;
 };
 
 template <> AMREX_GPU_HOST_DEVICE auto RadSystem<SuOlsonProblemCgs>::ComputePlanckOpacity(const double /*rho*/, const double /*Tgas*/) -> amrex::Real
@@ -121,18 +112,7 @@ AMRSimulation<SuOlsonProblemCgs>::setCustomBoundaryConditions(const amrex::IntVe
 	}
 
 	// set boundary condition for cell 'iv'
-#if (AMREX_SPACEDIM == 1)
-	auto i = iv.toArray()[0];
-	int j = 0;
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 2)
-	auto [i, j] = iv.toArray();
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 3)
-	auto [i, j, k] = iv.toArray();
-#endif
+	auto const [i, j, k] = iv.dim3();
 
 	if (i < 0) {
 		// Marshak boundary condition
@@ -369,7 +349,7 @@ auto problem_main() -> int
 		// matplotlibcpp::yscale("log");
 		matplotlibcpp::legend();
 		matplotlibcpp::tight_layout();
-		// matplotlibcpp::title(fmt::format("time t = {:.4g}", sim.tNew_[0]));
+		// matplotlibcpp::title(std::format("time t = {:.4g}", sim.tNew_[0]));
 		matplotlibcpp::save("./marshak_wave_cgs_gastemperature.pdf");
 #endif
 	}

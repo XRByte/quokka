@@ -16,7 +16,7 @@
 #include "radiation/radiation_system.hpp"
 #include "util/BC.hpp"
 #include "util/fextract.hpp"
-#include <fmt/format.h>
+#include <format>
 #include <fstream>
 
 struct MGProblem {
@@ -103,33 +103,17 @@ template <> struct quokka::EOS_Traits<ExactProblem> {
 	static constexpr double gamma = 5. / 3.;
 };
 
-template <> struct Physics_Traits<MGProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<MGProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = true;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
 	// face-centred
-	static constexpr bool is_mhd_enabled = false;
 	static constexpr int nGroups = n_groups_;
-	static constexpr UnitSystem unit_system = UnitSystem::CGS;
 };
-template <> struct Physics_Traits<ExactProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<ExactProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = true;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
-	// face-centred
-	static constexpr bool is_mhd_enabled = false;
-	static constexpr int nGroups = 1;
-	static constexpr UnitSystem unit_system = UnitSystem::CGS;
 };
 
 template <> struct RadSystem_Traits<MGProblem> {
@@ -512,7 +496,7 @@ auto problem_main() -> int
 	matplotlibcpp::xlabel("length x (cm)");
 	matplotlibcpp::ylabel("temperature (K)");
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("nGroups = {}, time t = {:.4g}", n_groups_, sim.tNew_[0]));
+	matplotlibcpp::title(std::format("nGroups = {}, time t = {:.4g}", n_groups_, sim.tNew_[0]));
 	matplotlibcpp::tight_layout();
 	matplotlibcpp::save("./radhydro_pulse_MG_int_temperature.pdf");
 
@@ -530,7 +514,7 @@ auto problem_main() -> int
 	matplotlibcpp::xlabel("length x (cm)");
 	matplotlibcpp::ylabel("gas density (g cm^-3)");
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("nGroups = {}, time t = {:.4g}", n_groups_, sim.tNew_[0]));
+	matplotlibcpp::title(std::format("nGroups = {}, time t = {:.4g}", n_groups_, sim.tNew_[0]));
 	matplotlibcpp::tight_layout();
 	matplotlibcpp::save("./radhydro_pulse_MG_int_density.pdf");
 
@@ -549,7 +533,7 @@ auto problem_main() -> int
 	matplotlibcpp::ylabel("gas velocity (km s^-1)");
 	matplotlibcpp::ylim(-5., 5.);
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("nGroups = {}, time t = {:.4g}", n_groups_, sim.tNew_[0]));
+	matplotlibcpp::title(std::format("nGroups = {}, time t = {:.4g}", n_groups_, sim.tNew_[0]));
 	matplotlibcpp::tight_layout();
 	matplotlibcpp::save("./radhydro_pulse_MG_int_velocity.pdf");
 #endif

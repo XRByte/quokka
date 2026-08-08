@@ -12,7 +12,7 @@
 #endif
 #include "math/interpolate.hpp"
 #include "radiation/radiation_system.hpp"
-#include <fmt/format.h>
+#include <format>
 #include <vector>
 
 #include "QuokkaSimulation.hpp"
@@ -45,19 +45,10 @@ template <> struct RadSystem_Traits<CouplingProblem> {
 	static constexpr int beta_order = 1;
 };
 
-template <> struct Physics_Traits<CouplingProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<CouplingProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = false;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
-	// face-centred
-	static constexpr bool is_mhd_enabled = false;
-	static constexpr int nGroups = 1; // number of radiation groups
-	static constexpr UnitSystem unit_system = UnitSystem::CGS;
 };
 
 template <> AMREX_GPU_HOST_DEVICE auto RadSystem<CouplingProblem>::ComputePlanckOpacity(const double /*rho*/, const double /*Tgas*/) -> amrex::Real
@@ -139,7 +130,8 @@ template <> void QuokkaSimulation<CouplingProblem>::computeAfterTimestep()
 		const amrex::Real x2GasMom = values.at(RadSystem<CouplingProblem>::x2GasMomentum_index)[0];
 		const amrex::Real x3GasMom = values.at(RadSystem<CouplingProblem>::x3GasMomentum_index)[0];
 		const amrex::Real rho = values.at(RadSystem<CouplingProblem>::gasDensity_index)[0];
-		const amrex::Real Egas_i = RadSystem<CouplingProblem>::ComputeEintFromEgas(rho, x1GasMom, x2GasMom, x3GasMom, Etot_i);
+		static_assert(!Physics_Traits<CouplingProblem>::is_mhd_enabled, "MHD is enabled; pass magnetic_energy instead of 0.0");
+		const amrex::Real Egas_i = quokka::EOS<CouplingProblem>::ComputeEintFromEgas(rho, x1GasMom, x2GasMom, x3GasMom, Etot_i, 0.0);
 
 		const amrex::Real Erad_i = values.at(RadSystem<CouplingProblem>::radEnergy_index)[0];
 
@@ -247,8 +239,8 @@ auto problem_main() -> int
 		matplotlibcpp::xlabel("time t (s)");
 		matplotlibcpp::ylabel("temperature T (K)");
 		// matplotlibcpp::title(
-		//    fmt::format("dt = {:.4g}\nt = {:.4g}", constant_dt, sim.tNew_));
-		matplotlibcpp::save(fmt::format("./radcoupling.pdf"));
+		//    std::format("dt = {:.4g}\nt = {:.4g}", constant_dt, sim.tNew_));
+		matplotlibcpp::save(std::format("./radcoupling.pdf"));
 
 		matplotlibcpp::clf();
 
@@ -259,7 +251,7 @@ auto problem_main() -> int
 		matplotlibcpp::plot(t, frac_err);
 		matplotlibcpp::xlabel("time t (s)");
 		matplotlibcpp::ylabel("fractional error in material temperature");
-		matplotlibcpp::save(fmt::format("./radcoupling_fractional_error.pdf"));
+		matplotlibcpp::save(std::format("./radcoupling_fractional_error.pdf"));
 #endif
 	}
 

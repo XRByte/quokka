@@ -10,6 +10,7 @@
 #include "AMReX_Print.H"
 #include "AMReX_SPACE.H"
 #include "util/BC.hpp"
+#include <format>
 
 #include "QuokkaSimulation.hpp"
 #include "fundamental_constants.H"
@@ -21,11 +22,12 @@ struct ParticleSFProblem {
 
 constexpr Real mu = 1.0 * C::m_p;
 constexpr Real gamma_ = 5. / 3.;
-constexpr Real year = 3.15576e+07; // in seconds
-static Real n0 = 1.0e4;		   // NOLINT
-static Real Tamb = 10.0;	   // NOLINT
+constexpr Real year = 3.15576e+07;	       // in seconds
+static Real n0 = 1.0e4;			       // NOLINT
+static Real Tamb = 10.0;		       // NOLINT
+static bool validate_initial_imf_stats = true; // NOLINT
 
-template <> struct Particle_Traits<ParticleSFProblem> {
+template <> struct Particle_Traits<ParticleSFProblem> : DefaultParticleTraits {
 	// static constexpr ParticleSwitch particle_switch = ParticleSwitch::None;
 	static constexpr ParticleSwitch particle_switch = ParticleSwitch::StochasticStellarPop;
 };
@@ -33,25 +35,16 @@ template <> struct Particle_Traits<ParticleSFProblem> {
 template <> struct quokka::EOS_Traits<ParticleSFProblem> {
 	static constexpr double gamma = gamma_;
 	static constexpr double mean_molecular_weight = mu;
+	using EOSBackend = quokka::EOSTabulated<ParticleSFProblem>;
 };
 
 template <> struct HydroSystem_Traits<ParticleSFProblem> {
 	static constexpr bool reconstruct_eint = true; // need to reconstruct temperature
 };
 
-template <> struct Physics_Traits<ParticleSFProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<ParticleSFProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = true;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
-	static constexpr bool is_radiation_enabled = false;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
-	// face-centred
-	static constexpr bool is_mhd_enabled = false;
-	static constexpr int nGroups = 1; // number of radiation groups
-	static constexpr UnitSystem unit_system = UnitSystem::CGS;
 };
 
 template <> struct SimulationData<ParticleSFProblem> {
@@ -93,7 +86,8 @@ template <> void QuokkaSimulation<ParticleSFProblem>::refineGrid(int lev, amrex:
 template <> void QuokkaSimulation<ParticleSFProblem>::computeAfterTimestep()
 {
 	const int step = istep[0];
-	if (step == 1) {
+	const bool use_default_low_mass_cap = (quokka::low_mass_composite_max_mass >= 0.99 * std::numeric_limits<amrex::Real>::max());
+	if (step == 1 && validate_initial_imf_stats && use_default_low_mass_cap) {
 		amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> const &dx0 = geom[0].CellSizeArray();
 		const amrex::Real cell_volume = AMREX_D_TERM(dx0[0], *dx0[1], *dx0[2]);
 
@@ -242,6 +236,9 @@ auto problem_main() -> int
 	amrex::ParmParse const ppp("problem");
 	ppp.query("Tamb", Tamb);
 	ppp.query("n0", n0);
+	ppp.query("validate_initial_imf_stats", validate_initial_imf_stats);
+	bool verify_low_mass_cap_on_restart = false;
+	ppp.query("verify_low_mass_cap_on_restart", verify_low_mass_cap_on_restart);
 
 	sim.setInitialConditions();
 
@@ -252,17 +249,54 @@ auto problem_main() -> int
 
 	sim.evolve();
 
-	// If restarting from checkfile, return success. The initial gas mass is unknown, so there is nothing to compare with.
-	// We validate restarting from checkfile.
-
+	// We validate restarting from a checkpoint below when verify_low_mass_cap_on_restart is true.
 	std::string restartfile;
 	amrex::ParmParse const p3;
 	p3.query("restartfile", restartfile);
 	if (!restartfile.empty()) {
+		if (!verify_low_mass_cap_on_restart) {
+			return 0; // success
+		}
+
+		amrex::Real low_mass_cap = std::numeric_limits<amrex::Real>::max();
+		amrex::ParmParse const p_particles("particles");
+		p_particles.query("low_mass_composite_max_mass", low_mass_cap);
+
+		const auto [real_data_restart, idata_restart] =
+		    sim.particleRegister_.getParticleDescriptor(quokka::ParticleType::StochasticStellarPop)->getParticleDataAtLevel(0);
+		const amrex::Real mass_tol = 1.0e-12 * std::max(low_mass_cap, static_cast<amrex::Real>(1.0));
+
+		int num_low_mass_particles = 0;
+		int num_cap_violations = 0;
+		int restart_validation_status = 0;
+
+		if (amrex::ParallelDescriptor::IOProcessor()) {
+			for (std::size_t i = 0; i < real_data_restart.size(); ++i) {
+				const bool is_low_mass_composite = (idata_restart[i][quokka::StochasticStellarPopParticleStageIdx] ==
+								    static_cast<int>(quokka::StellarEvolutionStage::LowMassComposite));
+				if (is_low_mass_composite) {
+					num_low_mass_particles++;
+					if (real_data_restart[i][quokka::StochasticStellarPopParticleMassIdx] > (low_mass_cap + mass_tol)) {
+						num_cap_violations++;
+					}
+				}
+			}
+
+			amrex::Print() << "Restart low-mass cap validation: LowMassComposite particles = " << num_low_mass_particles
+				       << ", cap violations = " << num_cap_violations << ", cap = " << low_mass_cap / C::M_solar << " Msun\n";
+			if (num_low_mass_particles == 0 || num_cap_violations != 0) {
+				restart_validation_status = 1;
+			}
+		}
+
+		amrex::ParallelDescriptor::Bcast(&restart_validation_status, 1, amrex::ParallelDescriptor::IOProcessorNumber());
+		AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+		    restart_validation_status == 0,
+		    "Restart low-mass cap validation failed: either no LowMassComposite particles were found or at least one exceeded the mass cap.");
 		return 0; // success
 	}
 
-	// If not from checkpoint, validate mass sonservation (roughly)
+	// If not restarting from a checkpoint, validate mass sonservation (roughly)
 
 	const auto [real_data_final2, idata_final2] =
 	    sim.particleRegister_.getParticleDescriptor(quokka::ParticleType::StochasticStellarPop)->getParticleDataAtLevel(0);
@@ -276,7 +310,7 @@ auto problem_main() -> int
 		// get total gas mass
 		const double m_gas_final2 = sim.state_new_cc_[0].sum(HydroSystem<ParticleSFProblem>::density_index) * cell_volume;
 		const double m_gas_change2 = sim.userData_.m_gas_init - m_gas_final2;
-		amrex::Print() << fmt::format("Mass of all stars [expected]   = {:.6e} [{:.6e}] M_sol \n", m_star_tot2 / C::M_solar,
+		amrex::Print() << std::format("Mass of all stars [expected]   = {:.6e} [{:.6e}] M_sol \n", m_star_tot2 / C::M_solar,
 					      m_gas_change2 / C::M_solar);
 
 		const double tol_m_star_tot2 = 0.1;

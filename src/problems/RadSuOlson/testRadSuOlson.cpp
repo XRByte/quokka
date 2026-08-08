@@ -14,7 +14,7 @@
 #include "math/interpolate.hpp"
 #include "radiation/radiation_system.hpp"
 #include <cmath>
-#include <fmt/format.h>
+#include <format>
 #include <limits>
 
 #include "AMReX_Array.H"
@@ -62,19 +62,12 @@ template <> struct quokka::EOS_Traits<MarshakProblem> {
 	static constexpr double gamma = 5. / 3.;
 };
 
-template <> struct Physics_Traits<MarshakProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<MarshakProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = false;
 	static constexpr bool is_chemistry_enabled = false;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
 	// face-centred
-	static constexpr bool is_mhd_enabled = false;
-	static constexpr int nGroups = 1; // number of radiation groups
 	static constexpr UnitSystem unit_system = UnitSystem::CONSTANTS;
 	static constexpr double boltzmann_constant = 1.0;
 	static constexpr double gravitational_constant = 1.0;
@@ -339,7 +332,7 @@ auto problem_main() -> int
 		matplotlibcpp::legend();
 		matplotlibcpp::xlabel("length x (dimensionless)");
 		matplotlibcpp::ylabel("temperature (dimensionless)");
-		matplotlibcpp::title(fmt::format("time t = {:.4g}", sim.tNew_[0]));
+		matplotlibcpp::title(std::format("time t = {:.4g}", sim.tNew_[0]));
 		matplotlibcpp::xlim(0.1, 30.0); // cm
 		// matplotlibcpp::ylim(0.0, 1.3);	// dimensionless
 		matplotlibcpp::xscale("log");

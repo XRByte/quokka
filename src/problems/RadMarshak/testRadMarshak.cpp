@@ -14,7 +14,7 @@
 #include "radiation/radiation_system.hpp"
 #include "util/BC.hpp"
 #include <cmath>
-#include <fmt/format.h>
+#include <format>
 #include <fstream>
 
 #include "AMReX_BLassert.H"
@@ -49,18 +49,11 @@ template <> struct RadSystem_Traits<SuOlsonProblem> {
 	static constexpr int beta_order = 0;
 };
 
-template <> struct Physics_Traits<SuOlsonProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<SuOlsonProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = false;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
 	// face-centred
-	static constexpr bool is_mhd_enabled = false;
-	static constexpr int nGroups = 1; // number of radiation groups
 	static constexpr UnitSystem unit_system = UnitSystem::CONSTANTS;
 	static constexpr double boltzmann_constant = 1.0;
 	static constexpr double gravitational_constant = 1.0;
@@ -122,18 +115,7 @@ AMRSimulation<SuOlsonProblem>::setCustomBoundaryConditions(const amrex::IntVect 
 		return;
 	}
 
-#if (AMREX_SPACEDIM == 1)
-	auto i = iv.toArray()[0];
-	int j = 0;
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 2)
-	auto [i, j] = iv.toArray();
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 3)
-	auto [i, j, k] = iv.toArray();
-#endif
+	auto const [i, j, k] = iv.dim3();
 
 	if (i < 0) {
 		// Marshak boundary condition
@@ -343,7 +325,7 @@ auto problem_main() -> int
 		matplotlibcpp::ylim(0.0, 1.0);	// dimensionless
 		matplotlibcpp::xscale("log");
 		matplotlibcpp::legend();
-		matplotlibcpp::title(fmt::format("time t = {:.4g}", sim.tNew_[0]));
+		matplotlibcpp::title(std::format("time t = {:.4g}", sim.tNew_[0]));
 		matplotlibcpp::save("./marshak_wave_temperature.pdf");
 
 		// material temperature
@@ -363,7 +345,7 @@ auto problem_main() -> int
 		matplotlibcpp::ylim(0.0, 1.0);	// dimensionless
 		matplotlibcpp::xscale("log");
 		matplotlibcpp::legend();
-		matplotlibcpp::title(fmt::format("time t = {:.4g}", sim.tNew_[0]));
+		matplotlibcpp::title(std::format("time t = {:.4g}", sim.tNew_[0]));
 		matplotlibcpp::save("./marshak_wave_gastemperature.pdf");
 #endif
 	}

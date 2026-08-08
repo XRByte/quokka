@@ -11,7 +11,7 @@
 #include "radiation/radiation_system.hpp"
 #include "util/BC.hpp"
 #include <cmath>
-#include <fmt/format.h>
+#include <format>
 #include <fstream>
 #include <unordered_map>
 
@@ -111,17 +111,11 @@ template <> struct quokka::EOS_Traits<PulseProblem> {
 	static constexpr double gamma = 5. / 3.;
 };
 
-template <> struct Physics_Traits<PulseProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<PulseProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = true;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
 	// face-centred
-	static constexpr bool is_mhd_enabled = false;
 	static constexpr int nGroups = n_groups_;
 	static constexpr UnitSystem unit_system = UnitSystem::CONSTANTS;
 	static constexpr double boltzmann_constant = k_B;
@@ -380,14 +374,14 @@ auto problem_main() -> int
 	matplotlibcpp::ylabel("temperature (dimensionless)");
 	matplotlibcpp::legend();
 	matplotlibcpp::ylim(0.0, 1.0);
-	matplotlibcpp::title(fmt::format("time ct = {:.4g}", sim.tNew_[0] * c));
+	matplotlibcpp::title(std::format("time ct = {:.4g}", sim.tNew_[0] * c));
 	// if constexpr (beta_order_ == 1) {
 	// 	matplotlibcpp::ylim(1.0 - 1.0e-7, 1.0 + 1.0e-7);
 	// }
 	matplotlibcpp::tight_layout();
 	// matplotlibcpp::save("./adv_temp.pdf");
 	// save to adv_temp_{n_groups_}bins.pdf
-	matplotlibcpp::save(fmt::format("./adv_temp_{}_bins.pdf", n_groups_));
+	matplotlibcpp::save(std::format("./adv_temp_{}_bins.pdf", n_groups_));
 
 	// plot spectrum
 	matplotlibcpp::clf();
@@ -407,11 +401,11 @@ auto problem_main() -> int
 	matplotlibcpp::xlabel("frequency (dimensionless)");
 	matplotlibcpp::ylabel("spectrum density (dimensionless)");
 	// matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("time ct = {:.4g}", sim.tNew_[0] * c));
+	matplotlibcpp::title(std::format("time ct = {:.4g}", sim.tNew_[0] * c));
 	matplotlibcpp::tight_layout();
 	// matplotlibcpp::save("./adv_spectrum.pdf");
 	// save to adv_spectrum_{n_groups_}bins.pdf
-	matplotlibcpp::save(fmt::format("./adv_spectrum_{}_bins.pdf", n_groups_));
+	matplotlibcpp::save(std::format("./adv_spectrum_{}_bins.pdf", n_groups_));
 
 	// plot flux spectrum
 	matplotlibcpp::clf();
@@ -431,11 +425,11 @@ auto problem_main() -> int
 	matplotlibcpp::xlabel("frequency (dimensionless)");
 	matplotlibcpp::ylabel("flux density (dimensionless)");
 	matplotlibcpp::legend();
-	matplotlibcpp::title(fmt::format("time ct = {:.4g}", sim.tNew_[0] * c));
+	matplotlibcpp::title(std::format("time ct = {:.4g}", sim.tNew_[0] * c));
 	matplotlibcpp::tight_layout();
 	// matplotlibcpp::save("./adv_flux_spectrum.pdf");
 	// save to adv_flux_spectrum_{n_groups_}bins.pdf
-	matplotlibcpp::save(fmt::format("./adv_flux_spectrum_{}_bins.pdf", n_groups_));
+	matplotlibcpp::save(std::format("./adv_flux_spectrum_{}_bins.pdf", n_groups_));
 #endif
 
 	if (export_csv) {

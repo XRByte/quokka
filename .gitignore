@@ -21,7 +21,10 @@ __pycache__
 *.sarif
 Backtrace.*
 
+*.hdf5
+
 # Agora galaxy uncompressed data
+/extern/agora_data/vcirc_with_constant_halo.csv
 /extern/agora_data/vcirc.dat
 /extern/agora_data/AgoraGalaxy_particles_LOW.txt
 
@@ -32,6 +35,12 @@ Backtrace.*
 /tests/
 !/tests/matplotlibrc
 # !/tests/ascent_actions.yaml
+
+# agent files
+/.claude/*
+!/.claude/settings.json
+/.agent
+/.agents
 
 # LaTeX files
 *.aux
@@ -103,3 +112,6 @@ KokkosCore_config.tmp
 *.exe
 *.out
 *.app
+
+# hdf5 files
+*.hdf5

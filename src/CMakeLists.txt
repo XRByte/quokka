@@ -89,6 +89,13 @@ if(DISABLE_FMAD)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Mnofma>)
     add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-gpu=nofma>)
   endif()
+
+  if(AMReX_GPU_BACKEND MATCHES "HIP")
+    # HIP device code compiles through the CXX/C language (hipcc/amdclang++), not a separate CUDA-like
+    # language, so disabling FMA contraction here (as for the CUDA-Clang branch above) covers device code too.
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:-ffp-contract=off>)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
+  endif()
 else()
   # fused MAD causes directional asymmetry -- enabled by default by nvcc and clang
   message(STATUS "Fused multiply-add (FMAD) is *enabled* for device code. Exact direction symmetry will NOT be preserved.")
@@ -117,7 +124,6 @@ endif(WARNINGS_AS_ERRORS)
 # endif()
 
 include_directories(${amrex_INCLUDE_DIRS_RET})
-include_directories(${fmt_INCLUDE_DIRS_RET})
 include_directories(${HDF5_INCLUDE_DIRS})
 include_directories(${Boost_INCLUDE_DIRS_RET})
 include_directories(${CMAKE_SOURCE_DIR}/src)
@@ -133,7 +139,6 @@ if(TARGET amrex_hydro_api)
   link_libraries(amrex_hydro_api)
 endif()
 link_libraries(AMReX::amrex)
-link_libraries(fmt::fmt)
 link_libraries(${HDF5_LIBRARIES})
 link_libraries(yaml-cpp::yaml-cpp)
 link_libraries(turbulence::turbulence)
@@ -142,16 +147,21 @@ include(CTest)
 
 set (QuokkaSourcesNoEOS "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
                         "${CMAKE_CURRENT_SOURCE_DIR}/io/DiagBase.cpp" 
+                        "${CMAKE_CURRENT_SOURCE_DIR}/io/DerivedFieldBase.cpp"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/io/DerivedParticleDeposition.cpp"
                         "${CMAKE_CURRENT_SOURCE_DIR}/io/DiagFilter.cpp" 
                         "${CMAKE_CURRENT_SOURCE_DIR}/io/DiagFramePlane.cpp" 
                         "${CMAKE_CURRENT_SOURCE_DIR}/io/DiagPDF.cpp" 
                         "${CMAKE_CURRENT_SOURCE_DIR}/io/DiagPlotfile.cpp"
                         "${CMAKE_CURRENT_SOURCE_DIR}/io/DiagParticleTxt.cpp"
-                        "${CMAKE_CURRENT_SOURCE_DIR}/io/DiagProjectionPlot.cpp"
-                        "${CMAKE_CURRENT_SOURCE_DIR}/io/projection.cpp" 
                         "${CMAKE_CURRENT_SOURCE_DIR}/cooling/ResampledCooling.cpp"
                         "${CMAKE_CURRENT_SOURCE_DIR}/util/fextract.cpp"
                         "${openPMDSources}")
+
+if(AMReX_SPACEDIM EQUAL 3)
+  list(APPEND QuokkaSourcesNoEOS "${CMAKE_CURRENT_SOURCE_DIR}/io/projection.cpp")
+  list(APPEND QuokkaSourcesNoEOS "${CMAKE_CURRENT_SOURCE_DIR}/io/DiagProjectionPlot.cpp")
+endif()
 
 set (QuokkaObjSources "${QuokkaSourcesNoEOS}" "${gamma_law_sources}")
 

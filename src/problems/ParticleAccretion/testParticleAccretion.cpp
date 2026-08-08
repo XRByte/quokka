@@ -16,6 +16,7 @@
 #include "math/interpolate.hpp"
 #include "util/BC.hpp"
 #include "util/fextract.hpp"
+#include <format>
 #include <gcem.hpp>
 
 #ifdef HAVE_PYTHON
@@ -49,7 +50,7 @@ bool refine_center = true;			 // NOLINT
 
 // constexpr double r_B = C::Gconst * C::M_solar / (cs0 * cs0);
 
-template <> struct Particle_Traits<AccretionProblem> {
+template <> struct Particle_Traits<AccretionProblem> : DefaultParticleTraits {
 	// static constexpr ParticleSwitch particle_switch = ParticleSwitch::None;
 	static constexpr ParticleSwitch particle_switch = ParticleSwitch::Sink;
 };
@@ -64,19 +65,12 @@ template <> struct HydroSystem_Traits<AccretionProblem> {
 	static constexpr bool reconstruct_eint = false;
 };
 
-template <> struct Physics_Traits<AccretionProblem> {
+template <> struct Physics_Traits<AccretionProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = true;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
-	static constexpr bool is_radiation_enabled = false;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
 	static constexpr bool is_self_gravity_enabled = true;
 	// face-centred
 	static constexpr bool is_mhd_enabled = true;
-	static constexpr int nGroups = 1; // number of radiation groups
-	static constexpr UnitSystem unit_system = UnitSystem::CGS;
 };
 
 template <> struct SimulationData<AccretionProblem> {
@@ -547,12 +541,21 @@ auto problem_main() -> int
 			amrex::Print() << "time = " << time[i] << ", Mstar = " << Mstar_[i] << "\n";
 		}
 
-		// compute exact accretion rate
-		const Real r_BH = C::Gconst * M_star_in_g / (cs0 * cs0);
-		const Real lam = std::exp(1.5) / 4.0;
-		const Real rho_bg = uniform_density > 0.0 ? uniform_density : rho0;
-		const Real Mdot_exact = 4.0 * M_PI * rho_bg * r_BH * r_BH * (lam * cs0);
-		amrex::Print() << "Mdot_exact = " << Mdot_exact << "\n";
+		// compute exact accretion rate (MHD-aware Bondi formula)
+		Real Mdot_exact = NAN;
+		{
+			const Real magnetic_pressure = 0.5 * B0 * B0;
+			const Real rho_bg = uniform_density > 0.0 ? uniform_density : rho0;
+			const Real beta = (rho_bg / mu) * C::k_B * T0 / magnetic_pressure;
+			// MHD-aware fast magnetosonic speed: cf^2 = cs^2 * (1 + 2/beta) (isothermal)
+			const Real cf_sqr = cs0 * cs0 * (1.0 + 2.0 / beta);
+			const Real v_infty_sqr = 0.0;
+			const Real r_BH_mhd = C::Gconst * M_star_in_g / (v_infty_sqr + cf_sqr);
+			const Real lambda = gcem::exp(1.5) / 4.0;
+			// M_dot = 4 pi rho_infty r_BH^2 * sqrt(v_infty^2 + lambda^2 cf^2), where lambda = exp(3/2) / 4
+			Mdot_exact = 4.0 * M_PI * rho_bg * r_BH_mhd * r_BH_mhd * std::sqrt(v_infty_sqr + lambda * lambda * cf_sqr);
+			amrex::Print() << "Mdot_exact = " << Mdot_exact << "\n";
+		}
 
 		// Estimate the accretion rate from the particle data
 		const int last_step = static_cast<int>(time.size()) - 1;
@@ -582,7 +585,7 @@ auto problem_main() -> int
 		matplotlibcpp::scatter(time, Mstar_, 10.0);
 		matplotlibcpp::xlabel("Time");
 		matplotlibcpp::ylabel("Particle Mass");
-		const std::string title = fmt::format("Exact Bondi accretion rate = {:.2e} g/s", Mdot_exact);
+		const std::string title = std::format("Exact Bondi accretion rate = {:.2e} g/s", Mdot_exact);
 		matplotlibcpp::title(title);
 		matplotlibcpp::save("sink_accretion_particle_mass.png");
 #endif

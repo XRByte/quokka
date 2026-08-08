@@ -11,7 +11,7 @@
 #include "util/matplotlibcpp.h"
 #endif
 #include "radiation/radiation_system.hpp"
-#include <fmt/format.h>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -50,20 +50,13 @@ template <> struct quokka::EOS_Traits<TubeProblem> {
 	static constexpr double gamma = gamma_gas;
 };
 
-template <> struct Physics_Traits<TubeProblem> {
-	static constexpr bool is_self_gravity_enabled = false;
+template <> struct Physics_Traits<TubeProblem> : DefaultPhysicsTraits {
 	// cell-centred
 	static constexpr bool is_hydro_enabled = true;
-	static constexpr int numMassScalars = 0;		     // number of mass scalars
-	static constexpr int numPassiveScalars = numMassScalars + 0; // number of passive scalars
 	static constexpr bool is_radiation_enabled = true;
-	static constexpr bool is_dust_enabled = false;
-	static constexpr int nDustGroups = 1; // number of dust groups
 	// face-centred
-	static constexpr bool is_mhd_enabled = false;
 	// number of radiation groups
 	static constexpr int nGroups = 2;
-	static constexpr UnitSystem unit_system = UnitSystem::CGS;
 };
 
 template <> struct RadSystem_Traits<TubeProblem> {
@@ -194,22 +187,8 @@ AMRSimulation<TubeProblem>::setCustomBoundaryConditions(const amrex::IntVect &iv
 							amrex::GeometryData const &geom, const amrex::Real /*time*/, const amrex::BCRec * /*bcr*/,
 							int /*bcomp*/, int /*orig_comp*/)
 {
-#if (AMREX_SPACEDIM == 1)
-	auto i = iv.toArray()[0];
-	int j = 0;
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 2)
-	auto [i, j] = iv.toArray();
-	int k = 0;
-#endif
-#if (AMREX_SPACEDIM == 3)
-	auto [i, j, k] = iv.toArray();
-#endif
-
-	amrex::Box const &box = geom.Domain();
-	amrex::GpuArray<int, 3> lo = box.loVect3d();
-	amrex::GpuArray<int, 3> hi = box.hiVect3d();
+	// Number of variables (use Physics_Indices which correctly accounts for enabled physics)
+	constexpr int nvar = Physics_Indices<TubeProblem>::nvarTotal_cc;
 
 	auto const radBoundaries_g = RadSystem<TubeProblem>::radBoundaries_;
 
@@ -217,47 +196,49 @@ AMRSimulation<TubeProblem>::setCustomBoundaryConditions(const amrex::IntVect &iv
 	auto radEnergyFractionsT0 = RadSystem<TubeProblem>::ComputePlanckEnergyFractions(radBoundaries_g, T_lo);
 	auto radEnergyFractionsT1 = RadSystem<TubeProblem>::ComputePlanckEnergyFractions(radBoundaries_g, T_hi);
 
-	if (i < lo[0]) {
-		// left side boundary -- constant
-		const double Erad = RadSystem<TubeProblem>::radiation_constant_ * std::pow(T_lo, 4);
-		for (int g = 0; g < Physics_Traits<TubeProblem>::nGroups; ++g) {
-			const double Frad = consVar(lo[0], j, k, RadSystem<TubeProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g);
-			consVar(i, j, k, RadSystem<TubeProblem>::radEnergy_index + Physics_NumVars::numRadVarsPerGroup * g) = Erad * radEnergyFractionsT0[g];
-			consVar(i, j, k, RadSystem<TubeProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = Frad;
-			consVar(i, j, k, RadSystem<TubeProblem>::x2RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = 0.;
-			consVar(i, j, k, RadSystem<TubeProblem>::x3RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = 0.;
-		}
-
-		const double Egas = (C::k_B / mu) * rho0 * T_lo / (gamma_gas - 1.0);
-		const double x1Mom = consVar(lo[0], j, k, RadSystem<TubeProblem>::x1GasMomentum_index);
-		const double Ekin = 0.5 * (x1Mom * x1Mom) / rho0;
-		consVar(i, j, k, RadSystem<TubeProblem>::gasEnergy_index) = Egas + Ekin;
-		consVar(i, j, k, RadSystem<TubeProblem>::gasDensity_index) = rho0;
-		consVar(i, j, k, RadSystem<TubeProblem>::gasInternalEnergy_index) = Egas;
-		consVar(i, j, k, RadSystem<TubeProblem>::x1GasMomentum_index) = x1Mom;
-		consVar(i, j, k, RadSystem<TubeProblem>::x2GasMomentum_index) = 0.;
-		consVar(i, j, k, RadSystem<TubeProblem>::x3GasMomentum_index) = 0.;
-	} else if (i > hi[0]) {
-		// right-side boundary -- constant
-		const double Erad = RadSystem<TubeProblem>::radiation_constant_ * std::pow(T_hi, 4);
-		for (int g = 0; g < Physics_Traits<TubeProblem>::nGroups; ++g) {
-			const double Frad = consVar(hi[0], j, k, RadSystem<TubeProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g);
-			consVar(i, j, k, RadSystem<TubeProblem>::radEnergy_index + Physics_NumVars::numRadVarsPerGroup * g) = Erad * radEnergyFractionsT1[g];
-			consVar(i, j, k, RadSystem<TubeProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = Frad;
-			consVar(i, j, k, RadSystem<TubeProblem>::x2RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = 0.;
-			consVar(i, j, k, RadSystem<TubeProblem>::x3RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g) = 0.;
-		}
-
-		const double Egas = (C::k_B / mu) * rho1 * T_hi / (gamma_gas - 1.0);
-		const double x1Mom = consVar(hi[0], j, k, RadSystem<TubeProblem>::x1GasMomentum_index);
-		const double Ekin = 0.5 * (x1Mom * x1Mom) / rho1;
-		consVar(i, j, k, RadSystem<TubeProblem>::gasEnergy_index) = Egas + Ekin;
-		consVar(i, j, k, RadSystem<TubeProblem>::gasDensity_index) = rho1;
-		consVar(i, j, k, RadSystem<TubeProblem>::gasInternalEnergy_index) = Egas;
-		consVar(i, j, k, RadSystem<TubeProblem>::x1GasMomentum_index) = x1Mom;
-		consVar(i, j, k, RadSystem<TubeProblem>::x2GasMomentum_index) = 0.;
-		consVar(i, j, k, RadSystem<TubeProblem>::x3GasMomentum_index) = 0.;
+	// Prepare left boundary values (left state)
+	amrex::GpuArray<amrex::Real, nvar> low_bdr_cells{};
+	// Set specific values for left boundary
+	const double Erad_left = RadSystem<TubeProblem>::radiation_constant_ * std::pow(T_lo, 4);
+	for (int g = 0; g < Physics_Traits<TubeProblem>::nGroups; ++g) {
+		low_bdr_cells[RadSystem<TubeProblem>::radEnergy_index + Physics_NumVars::numRadVarsPerGroup * g] = Erad_left * radEnergyFractionsT0[g];
+		low_bdr_cells[RadSystem<TubeProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0.;
+		low_bdr_cells[RadSystem<TubeProblem>::x2RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0.;
+		low_bdr_cells[RadSystem<TubeProblem>::x3RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0.;
 	}
+	const double Egas_left = (C::k_B / mu) * rho0 * T_lo / (gamma_gas - 1.0);
+	low_bdr_cells[RadSystem<TubeProblem>::gasEnergy_index] = Egas_left;
+	low_bdr_cells[RadSystem<TubeProblem>::gasDensity_index] = rho0;
+	low_bdr_cells[RadSystem<TubeProblem>::gasInternalEnergy_index] = Egas_left;
+	low_bdr_cells[RadSystem<TubeProblem>::x1GasMomentum_index] = 0.;
+	low_bdr_cells[RadSystem<TubeProblem>::x2GasMomentum_index] = 0.;
+	low_bdr_cells[RadSystem<TubeProblem>::x3GasMomentum_index] = 0.;
+
+	// Prepare right boundary values (right state)
+	amrex::GpuArray<amrex::Real, nvar> high_bdr_cells{};
+	// Initialize all to 0 first
+	for (int n = 0; n < nvar; ++n) {
+		high_bdr_cells[n] = 0;
+	}
+	// Set specific values for right boundary
+	const double Erad_right = RadSystem<TubeProblem>::radiation_constant_ * std::pow(T_hi, 4);
+	for (int g = 0; g < Physics_Traits<TubeProblem>::nGroups; ++g) {
+		high_bdr_cells[RadSystem<TubeProblem>::radEnergy_index + Physics_NumVars::numRadVarsPerGroup * g] = Erad_right * radEnergyFractionsT1[g];
+		high_bdr_cells[RadSystem<TubeProblem>::x1RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0.;
+		high_bdr_cells[RadSystem<TubeProblem>::x2RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0.;
+		high_bdr_cells[RadSystem<TubeProblem>::x3RadFlux_index + Physics_NumVars::numRadVarsPerGroup * g] = 0.;
+	}
+	const double Egas_right = (C::k_B / mu) * rho1 * T_hi / (gamma_gas - 1.0);
+	high_bdr_cells[RadSystem<TubeProblem>::gasEnergy_index] = Egas_right;
+	high_bdr_cells[RadSystem<TubeProblem>::gasDensity_index] = rho1;
+	high_bdr_cells[RadSystem<TubeProblem>::gasInternalEnergy_index] = Egas_right;
+	high_bdr_cells[RadSystem<TubeProblem>::x1GasMomentum_index] = 0.;
+	high_bdr_cells[RadSystem<TubeProblem>::x2GasMomentum_index] = 0.;
+	high_bdr_cells[RadSystem<TubeProblem>::x3GasMomentum_index] = 0.;
+
+	// Apply boundary conditions using helper functions (direction 0 = x-axis)
+	setConstantDirichletBCLo<0>(iv, consVar, geom, low_bdr_cells);
+	setConstantDirichletBCHi<0>(iv, consVar, geom, high_bdr_cells);
 }
 
 auto problem_main() -> int
@@ -335,10 +316,13 @@ auto problem_main() -> int
 		double const x2GasMom = values.at(RadSystem<TubeProblem>::x2GasMomentum_index)[i];
 		double const x3GasMom = values.at(RadSystem<TubeProblem>::x3GasMomentum_index)[i];
 
-		double const Eint_exact = RadSystem<TubeProblem>::ComputeEintFromEgas(rho_exact, x1GasMom_exact, x2GasMom_exact, x3GasMom_exact, Egas_exact);
+		static_assert(!Physics_Traits<TubeProblem>::is_mhd_enabled, "MHD is enabled; pass magnetic_energy instead of 0.0");
+		double const Eint_exact =
+		    quokka::EOS<TubeProblem>::ComputeEintFromEgas(rho_exact, x1GasMom_exact, x2GasMom_exact, x3GasMom_exact, Egas_exact, 0.0);
 		double const Tgas_exact = quokka::EOS<TubeProblem>::ComputeTgasFromEint(rho_exact, Eint_exact);
 
-		double const Eint = RadSystem<TubeProblem>::ComputeEintFromEgas(rho, x1GasMom, x2GasMom, x3GasMom, Egas);
+		static_assert(!Physics_Traits<TubeProblem>::is_mhd_enabled, "MHD is enabled; pass magnetic_energy instead of 0.0");
+		double const Eint = quokka::EOS<TubeProblem>::ComputeEintFromEgas(rho, x1GasMom, x2GasMom, x3GasMom, Egas, 0.0);
 		double const Tgas = quokka::EOS<TubeProblem>::ComputeTgasFromEint(rho, Eint);
 
 		Tgas_arr[i] = Tgas;
@@ -416,7 +400,7 @@ auto problem_main() -> int
 	matplotlibcpp::scatter(strided_vector_from(xs, s), strided_vector_from(Trad_exact_arr, s), 10.0, Texact_args);
 
 	matplotlibcpp::legend();
-	// matplotlibcpp::title(fmt::format("t = {:.4g} s", sim.tNew_[0]));
+	// matplotlibcpp::title(std::format("t = {:.4g} s", sim.tNew_[0]));
 	matplotlibcpp::xlabel("length x (cm)");
 	matplotlibcpp::ylabel("temperature (Kelvins)");
 	matplotlibcpp::tight_layout();
@@ -430,8 +414,8 @@ auto problem_main() -> int
 	Trad_args["color"] = "k";
 	matplotlibcpp::plot(xs, Erad_arr, Trad_args);
 	for (int g = 0; g < Physics_Traits<TubeProblem>::nGroups; ++g) {
-		Trad_args["label"] = fmt::format("E_{}", g);
-		Trad_args["color"] = fmt::format("C{}", g);
+		Trad_args["label"] = std::format("E_{}", g);
+		Trad_args["color"] = std::format("C{}", g);
 		// matplotlibcpp::plot(xs, strided_vector_from(Erad_arr_at_group, s, g), Trad_args);
 		matplotlibcpp::plot(xs, Erad_arr_at_group[g], Trad_args);
 	}
