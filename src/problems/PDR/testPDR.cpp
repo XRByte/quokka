@@ -128,8 +128,7 @@ template <> struct SimulationData<PDRTest> {
 // device-side custom BC can read them; set in preCalculateInitialConditions.
 namespace
 {
-// per-group radiation energy density floor (erg cm^-3); keeps dark bands strictly positive
-constexpr amrex::Real Erad_floor_val = C::a_rad * 1.0e-8;
+AMREX_GPU_MANAGED amrex::Real Erad_floor_val = C::a_rad * 1.0e-8; // NOLINT
 AMREX_GPU_MANAGED amrex::Real g_Erad_inc[3] = {0.0, 0.0, 0.0}; // NOLINT
 AMREX_GPU_MANAGED amrex::Real g_rho0 = 0.0;		       // NOLINT
 AMREX_GPU_MANAGED amrex::Real g_Egas0 = 0.0;		       // NOLINT
