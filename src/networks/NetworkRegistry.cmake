@@ -47,3 +47,43 @@ foreach(_pi_name photoionization_H_caseB photoionization_H_caseB_handwritten)
     ${_pi_species_args}
   )
 endforeach()
+
+# ---------------------------------------------------------------------------
+# GOW (Gong, Ostriker & Wolfire 2017) 18-species FUV chemistry + thermal network.
+# Hand-written (IS_JAFF FALSE): the auto-generated actual_rhs.H / actual_jac are
+# shipped verbatim in src/networks/GOW. Uses the dedicated EOS/GOW multigamma EOS
+# (per-species masses/gammas for all 18 species). Consumed by the PDR problem.
+#
+# Radiation: single chemistry-active FUV band. CHEM_BANDS is in eV (jaff native
+# unit): [6.0, 13.6] eV == the Draine 6-13.6 eV FUV band (was 1.4506e15-3.288e15 Hz
+# in the source). The RHS reads the per-cell photon field via state.rn[]/state.c_hat
+# (2 vars per group -> do NOT build with SKIP_PHOTOCHEMFLUX).
+#
+# Self-shielding columns ncol_{H2,CO,C,H} are delivered per-cell via burn_t::aux[0..3];
+# the PDR problem builds with -DNAUX_NET=4 and -DPDR_PARALLEL_NCOL_AUX.
+register_microphysics_network(GOW
+  EOSDIR            "GOW"
+  EOSPARAMFILE      "${CMAKE_SOURCE_DIR}/extern/Microphysics/EOS/GOW/_parameters"
+  NETWORKPARAMFILE  "${CMAKE_SOURCE_DIR}/src/networks/GOW/_parameters"
+  HAS_NET_FILE      FALSE
+  IS_JAFF           FALSE
+  USES_INTEGRATOR_DIRS TRUE
+  EXTRA_SOURCES     "${CMAKE_SOURCE_DIR}/extern/Microphysics/interfaces/eos_data.cpp"
+                    "${CMAKE_SOURCE_DIR}/extern/Microphysics/interfaces/network_initialization.cpp"
+                    "${CMAKE_SOURCE_DIR}/extern/Microphysics/EOS/GOW/actual_eos_data.cpp"
+                    "${CMAKE_SOURCE_DIR}/src/networks/GOW/actual_network_data.cpp"
+  NETWORK_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/src/networks/GOW"
+                        "${CMAKE_SOURCE_DIR}/extern/Microphysics/networks"
+  NSPEC 18
+  SPECIES_ENUM "H = 0, Hp, Elec, H2, H2p, He, Hep, Carbon, Cp, CO, HCOp, O, Si, Sip, CH, OH, H3p, Op"
+  SPEC_NAMES "\"Hydrogen\", \"Hydrogen_Ion\", \"Electron\", \"Molecular_Hydrogen\", \"Molecular_Hydrogen_Ion\", \"Helium\", \"Helium_Ion\", \"Carbon\", \"Carbon_Ion\", \"Carbon_Monoxide\", \"Formyl_Ion\", \"Oxygen\", \"Silicon\", \"Silicon_Ion\", \"Methylidyne\", \"Hydroxyl\", \"Trihydrogen_Ion\", \"Oxygen_Ion\""
+  SHORT_SPEC_NAMES "\"H\", \"H+\", \"e-\", \"H2\", \"H2+\", \"He\", \"He+\", \"C\", \"C+\", \"CO\", \"HCO+\", \"O\", \"Si\", \"Si+\", \"CH\", \"OH\", \"H3+\", \"O+\""
+  AION "1.008, 1.008, 5.48579909e-4, 2.016, 2.016, 4.002602, 4.002602, 12.011, 12.011, 28.010, 29.018, 15.999, 28.085, 28.085, 13.019, 17.007, 3.024, 15.999"
+  AION_INV "0.992063492, 0.992063492, 1822.888486, 0.496031746, 0.496031746, 0.249837452, 0.249837452, 0.083256182, 0.083256182, 0.035701535, 0.034461369, 0.062503906, 0.035605483, 0.035605483, 0.076811583, 0.058799318, 0.330687831, 0.062503906"
+  ZION "0.0, 1.0, -1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0"
+  AION_CONSTEXPR "case H: a = 1.008| break| case Hp: a = 1.008| break| case Elec: a = 5.48579909e-4| break| case H2: a = 2.016| break| case H2p: a = 2.016| break| case He: a = 4.002602| break| case Hep: a = 4.002602| break| case Carbon: a = 12.011| break| case Cp: a = 12.011| break| case CO: a = 28.010| break| case HCOp: a = 29.018| break| case O: a = 15.999| break| case Si: a = 28.085| break| case Sip: a = 28.085| break| case CH: a = 13.019| break| case OH: a = 17.007| break| case H3p: a = 3.024| break| case Op: a = 15.999| break|"
+  ZION_CONSTEXPR "case H: z = 0.0| break| case Hp: z = 1.0| break| case Elec: z = -1.0| break| case H2: z = 0.0| break| case H2p: z = 1.0| break| case He: z = 0.0| break| case Hep: z = 1.0| break| case Carbon: z = 0.0| break| case Cp: z = 1.0| break| case CO: z = 0.0| break| case HCOp: z = 1.0| break| case O: z = 0.0| break| case Si: z = 0.0| break| case Sip: z = 1.0| break| case CH: z = 0.0| break| case OH: z = 0.0| break| case H3p: z = 1.0| break| case Op: z = 1.0| break|"
+  NUM_CHEM_BANDS 1
+  CHEM_BANDS "6.0, 13.6" # eV (single 6-13.6 eV Draine FUV band)
+  POWER_LAW_INDEX 0
+)

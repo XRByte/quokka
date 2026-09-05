@@ -1,0 +1,37 @@
+@namespace: network
+
+
+# cutoff for species mass fractions
+small_x                              real               1.e-100
+# cutoff for species mass fractions
+redshift                              real               0e0
+# metallicity for GOW network
+metallicity                          real               1e0
+# dust to gas ratio relative to solar
+dust2gas_ratio                 real               1e0
+# dust abundance relative to solar (Zd = 1 is solar); scales dust-dependent
+# photorates/heating in actual_rhs.H
+Zd                             real               1e0
+# Cosmic ray ionization rate (per s)
+crate                          real               2e-16
+# Av
+Av                          real               0.
+# Ambient radiation field
+chi                          real               100
+# Shielding column densities (cm^-2) seen by the current zone. Set per-zone by
+# the host (e.g. the PseudoPDR problem's marched-slab loop), analogous to Av;
+# consumed by the H2/CO/C self-shielding terms in actual_rhs.H.
+ncol_H2                      real               0.
+ncol_CO                      real               0.
+ncol_C                       real               0.
+# Raw (un-doubled) line-of-sight H-nucleus column of the current zone, cm^-2,
+# set per-zone by the host. Used by the CO rotational cooling to build the
+# physical cloud depth L = ncol_H / nH for the LVG escape velocity. <=0 => the
+# CO cooling falls back to the local velocity-gradient escape.
+ncol_H                       real               -1.
+# Effective CO column for CO rotational cooling (= NCOeff * 1e5, cm^-2/(km/s)),
+# set per-zone by the host for a depth sweep (gow17 SetNCOeffGlobal+SetbCOL:
+# NCOeff = N_CO,raw / bCO_L, bCO_L = 1e5*sqrt((N_H/nH)/3.086e18)). Consumed by
+# the CO rotational cooling LVG lookup in actual_rhs.H in place of the local
+# velocity-gradient (Sobolev) escape column. <=0 falls back to the local escape.
+nco_eff                      real               -1.

@@ -1,0 +1,153 @@
+# *****************************************************************
+# 1-D photodissociation region (PDR) with LIVE radiation transport.
+#
+# A uniform slab of gas at fixed density n_H is illuminated from the lo-x face by
+# an external FUV field. The three chemistry-active radiation bands
+# ([0, 11.2, 13.6, inf] eV) are transported by the M1 solver; dust + line
+# absorption are baked into the Gong+2017 (gow17) network radiation terms and
+# applied by a custom serial per-cell chemistry burn (see testPDR.cpp), which also
+# integrates the H2/CO/C/H shielding columns cumulatively from the illuminated
+# face. Gas dynamics are frozen (only chemistry + temperature evolve).
+#
+# Slab length L = N_H,total / n_H = 1.87e22 / 1000 = 1.87e19 cm (Av up to ~10).
+# *****************************************************************
+
+initial_dt = 1.0e6
+
+[geometry]
+prob_lo = [0.0, 0.0, 0.0]
+# prob_hi[0] (Lx) is AUTO-DERIVED in problem_main from pdr.ninit and pdr.Av_max
+# (default 10): Lx = Av_max * 1.87e21 / n_H, so the slab always spans the same optical
+# depth regardless of density. The value here is a placeholder -- it is overridden.
+prob_hi = [1.87e19, 1.0, 1.0]
+
+[quokka]
+# lo-x is a custom radiation inflow (ext_dir, set in problem_main); the strings
+# here are placeholders -- the BCRec built in problem_main takes precedence.
+bc = ["ext_dir", "periodic", "periodic"]
+
+[amr]
+v = 0
+
+# Base resolution: 1024 cells along x (dx = 1.83e16 cm). Static face-anchored AMR
+# refines the illuminated edge: level 1 covers x < refine_frac_0*Lx, level 2 covers
+# x < refine_frac_1*Lx (telescoping), giving finest resolution at small Av and
+# coarsening inward. ref_ratio = 2, so level 2 is 4x finer (dx ~ 4.6e15 cm).
+# Each level stays a single box in x (max_grid_size >= n_cell) for the serial
+# face->interior shielding sweep; blocking_factor divides n_cell.
+n_cell = [1024, 1, 1]
+# 6 refine levels reach the illuminated face down to Av ~ 6e-4 (dx_finest =
+# 1.46e17/2^6 = 2.28e15 cm -> first-cell Av ~ 6e-4), resolving the H/H2 transition
+# region (Av ~ 1e-3) without the 1024x subcycle cost of going deeper. Telescoping
+# geometric refine_frac defaults (0.1 -> 2.15e-3) in testPDR.cpp anchor each level.
+max_level = 2
+ref_ratio = 2
+blocking_factor = 8
+max_grid_size = 1024
+# static tagging (position-based) -> regrid rarely; the grid never actually changes
+regrid_int = 1000000
+n_error_buf = 2
+
+do_reflux = 0
+do_subcycle = 1
+
+[amrex]
+signal_handling = 0
+
+# *****************************************************************
+# Chemistry / photochemistry
+# *****************************************************************
+# Both built-in burners are disabled: testPDR.cpp runs its own serial per-cell burn
+# in computeAfterTimestep so each cell gets its own shielding columns + photon field.
+[chemistry]
+enabled = 0
+
+[photochemistry]
+enabled = 0
+
+[pdr]
+stop_time = 2.0e14  # s; sim end time (long enough to relax the PDR structure)
+# Max coarse dt. Actual dt = min(radiation CFL, max_dt). Radiation CFL scales as
+# 1/c_hat_over_c: with c_hat_over_c=1e-5 (testPDR.cpp, lowered from 1e-4) the CFL ceiling
+# rises ~10x, so max_dt is raised 1e10 -> 1e11 to cut the coarse-step count ~10x. The frozen-gas
+# equilibrium PDR structure is ~independent of c_hat (RSLA: photorate ~c_hat*n_gamma invariant),
+# so this should not change the converged profile. Lower it if a burn needs a tighter cap.
+max_dt = 1.0e11
+temperature = 1.0e2  # K, initial (T solved self-consistently)
+ninit = 1000.0  # fixed gas number density n_H (cm^-3)
+small_temp = 1.0e1
+small_dens = 1.0e-60
+
+# Face-anchored refinement fractions (telescoping): level `lev` refines cells with
+# x < refine_frac_<lev> * Lx. Defaults (testPDR.cpp) are geometric 0.1 -> 1e-4 over
+# 10 levels; override refine_frac_<lev> here to retune. Must decrease with level.
+
+# Incident radiation energy density per band (erg cm^-3), injected at the lo-x face.
+# Default puts the Draine (1978) FUV energy density (chi=1) in band 1 (11.2-13.6 eV)
+# and leaves band 0 (0-11.2 eV) and band 2 (>13.6 eV, ionizing) dark. Set band 0/2 to
+# illuminate with the full ISRF. These are the incident-spectrum calibration knob.
+# Single band = 11.2-13.6 eV FUV; put the Draine energy density in band 0.
+Erad_inc_0 = 8.94e-14
+
+# *****************************************************************
+# Network (GOW) runtime parameters
+# *****************************************************************
+# No Av/chi: attenuation is carried by the live radiation bands. The shielding
+# columns ncol_* are set per-cell at runtime by the serial burn.
+[network]
+crate = 2.0e-16  # cosmic-ray ionization rate (s^-1)
+# Dust-to-gas MASS ratio (NOT the solar-normalized Zd). The network uses d2g/d2g_solar
+# with d2g_solar=0.01 baked into its coefficients, so solar dust (Zd=1) is d2g=0.01.
+# Setting this to 1.0 = 100x solar dust -> grain-PE heating and grain H2 formation both
+# 100x too strong (hot T, molecular-from-surface). Confirmed: 1.0 -> T_surf~450 K,
+# 0.01 -> T_surf~64 K (matches PseudoPDR reference).
+dust2gas_ratio = 0.01  # solar dust-to-gas MASS ratio
+# Dust radiation-sink multiplier. Set to 2 to work around a factor-2 in the generated
+# network: get_sradodes feeds the FUV density-moment sink the "absorption" cross-section
+# = (1-albedo)*extinction ~ 0.5*extinction, but shielding should use extinction. Zd=2
+# restores the full extinction attenuation (fronts move onto the PseudoPDR reference).
+# Revert to 1 once the network is regenerated with "absorption" -> "extinction".
+Zd = 1.0
+metallicity = 1.0
+redshift = 0.0
+small_x = 1.0e-60
+
+# *****************************************************************
+# Integrator (Microphysics Rosenbrock) runtime parameters
+# *****************************************************************
+[integrator]
+# Rosenbrock tableau selector (integration/Rosenbrock/rosenbrock_integrator.H):
+#   0 = rodas5p (5th order, L-stable; default, most accurate/expensive)
+#   1 = rodas4p (4th order)
+#   2 = rodas3p (3rd order)
+#   3 = ros2s   (2nd order, 2-stage; cheapest, stiff-robust -- used by the
+#                photoionization examples DTypeFront1D / OneZonePhotoionization)
+# Uses the shipped GOW analytic actual_jac. rodas4p (1) chosen from the tableau x rtol
+# sweep: fastest + flat across rtol; the low-order ros2s (3)/rodas3p (2) blow up at tight
+# rtol. Bump to 0 (rodas5p) only if the H/H2 + C+/CO fronts need more accuracy.
+rosenbrock_tableau = 1
+use_number_densities = 1
+call_eos_in_rhs = 1
+subtract_internal_energy = 0
+do_species_clip = 0
+SMALL_X_SAFE = 1e-60
+burner_verbose = 0
+use_jacobian_caching = 0
+X_reject_buffer = 1e100
+jacobian = 1
+renormalize_abundances = 0
+ode_max_steps = 5000000
+# retry a failed burn with a swapped Jacobian + looser tolerances before aborting;
+# handles occasional stiff cells at the H/H2 + C+/CO transitions
+use_burn_retry = 1
+retry_swap_jacobian = 1
+retry_rtol_spec = 1.0e-4
+retry_atol_spec = 1.0e-8
+retry_rtol_enuc = 1.0e-4
+retry_atol_enuc = 1.0e-8
+atol_spec = 1.0e-10
+# loosened from 1e-7: 1e-7 made nearly every one-shot burn fail-then-retry (2x cost);
+# 1e-5 is ample for the PDR structure and cuts the retry churn
+rtol_spec = 1.0e-3
+rtol_enuc = 1.0e-5
+atol_enuc = 1.0e-10
