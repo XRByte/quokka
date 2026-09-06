@@ -42,9 +42,11 @@
 #include <vector>
 
 #include "AMReX.H"
+#include "AMReX_GpuContainers.H"
 #include "AMReX_MultiFabUtil.H"
 #include "AMReX_ParmParse.H"
 #include "AMReX_REAL.H"
+#include "AMReX_Scan.H"
 
 #include "QuokkaSimulation.hpp"
 #include "SimulationData.hpp"
@@ -356,11 +358,12 @@ constexpr int n = 4;
 } // namespace ncol_comp
 
 // AMR-aware chemistry burn, split into two phases so the burn can be parallelized:
-//   Phase 1 (serial scan): compute each cell's cumulative shielding columns from the
-//     PRE-burn species, walking the composite grid face->interior (finest->coarsest,
-//     covered cells skipped via makeFineMask). Because the columns come from the
-//     pre-burn state, they do not depend on the order cells are burned -> Phase 2 is
-//     order-independent and parallelizable. Stored in a 4-component scratch MultiFab.
+//   Phase 1 (deterministic device prefix-sum): compute each cell's cumulative shielding
+//     columns from the PRE-burn species, walking the composite grid face->interior
+//     (finest->coarsest, covered cells skipped via makeFineMask). Each level is an exclusive
+//     scan (amrex::Scan, bit-reproducible) plus a serial inter-level carry. Because the
+//     columns come from the pre-burn state, they do not depend on the order cells are burned
+//     -> Phase 2 is order-independent and parallelizable. Stored in a 4-component scratch MultiFab.
 //   Phase 2 (burn): each cell reads its own columns and burns. Serial today, delivering
 //     the columns through the network global network_rp::ncol_*. Once the GOW RHS reads
 //     state.aux[] instead, define PDR_PARALLEL_NCOL_AUX (and NumAux>=4) to switch to the
@@ -392,62 +395,72 @@ template <> void QuokkaSimulation<PDRTest>::computeAfterTimestep()
 		mask[lev] = amrex::makeFineMask(state_new_cc_[lev], state_new_cc_[lev + 1], amrex::IntVect(0), refRatio(lev), geom[lev].periodicity(),
 						/*uncovered=*/1, /*covered=*/0);
 	}
-	auto is_covered = [&](int lev, amrex::Array4<int const> const &m, int i, int j, int k) { return (lev < finest) && (m(i, j, k) == 0); };
-
 	// ---- Phase 1: cumulative shielding columns (cm^-2) per cell, from PRE-burn species,
-	// walked face->interior over the composite grid. Serial scan (cheap; no chemistry).
+	// walked face->interior over the composite grid (deterministic device prefix-sum; no chemistry).
 	amrex::Vector<amrex::MultiFab> ncol_mf(finest + 1);
 	for (int lev = 0; lev <= finest; ++lev) {
 		ncol_mf[lev].define(boxArray(lev), DistributionMap(lev), ncol_comp::n, 0);
 		ncol_mf[lev].setVal(0.0);
 	}
+	// Deterministic device prefix-sum (amrex::Scan -> CUB/rocPRIM on GPU, serial on CPU):
+	// walk levels finest->coarsest with an inter-level carry; within a level exclusive-scan
+	// n_s*dx along x. Column c at cell i:  N_c(i) = carry_c + exclScan_c(i) + 0.5*contrib_c(i).
+	// Keeps the state on the device (no host access -> no managed-memory dependency) and is
+	// bit-reproducible run-to-run. Assumes ONE box per level (1-D: max_grid_size >= n_cell);
+	// covered cells contribute 0, so each physical location is counted once on the composite.
 	{
-		Real cH2 = 0.0;
-		Real cCO = 0.0;
-		Real cC = 0.0;
-		Real cH = 0.0;
+		// column index -> species number density at cell i (H column = H-nucleus sum)
+		auto column_ndens = [] AMREX_GPU_DEVICE(amrex::Array4<Real const> const &s, int i, int c) -> Real {
+			auto nsp = [&](int sp) { return s(i, 0, 0, HydroSystem<PDRTest>::scalar0_index + sp) / spmasses[sp]; };
+			switch (c) {
+				case ncol_comp::H2:
+					return nsp(3);
+				case ncol_comp::CO:
+					return nsp(9);
+				case ncol_comp::C:
+					return nsp(7);
+				default: // H nuclei: H + H+ + 2 H2 + 2 H2+ + HCO+ + CH + OH + 3 H3+
+					return nsp(0) + nsp(1) + 2.0 * nsp(3) + 2.0 * nsp(4) + nsp(10) + nsp(14) + nsp(15) + 3.0 * nsp(16);
+			}
+		};
+
+		// scratch sized to the largest level (level 0), reused across levels and columns
+		int maxN = 0;
+		for (int lev = 0; lev <= finest; ++lev) {
+			AMREX_ALWAYS_ASSERT_WITH_MESSAGE(boxArray(lev).size() == 1,
+							 "PDR Phase-1 scan assumes one box per level (set max_grid_size >= n_cell)");
+			maxN = std::max(maxN, static_cast<int>(boxArray(lev).numPts()));
+		}
+		amrex::Gpu::DeviceVector<Real> contrib(maxN);
+		amrex::Gpu::DeviceVector<Real> excl(maxN);
+		Real *pc = contrib.dataPtr();
+		Real *pe = excl.dataPtr();
+
+		std::array<Real, ncol_comp::n> carry{}; // carry_in per column; grows face->interior
 		for (int lev = finest; lev >= 0; --lev) {
 			const Real dxlev = geom[lev].CellSizeArray()[0];
+			const int has_mask = (lev < finest) ? 1 : 0;
 			for (amrex::MFIter iter(state_new_cc_[lev]); iter.isValid(); ++iter) {
 				const amrex::Box &bx = iter.validbox();
+				const int ilo = bx.smallEnd(0);
+				const int n = bx.length(0);
 				auto const &state = state_new_cc_[lev].const_array(iter);
 				auto const &ncol = ncol_mf[lev].array(iter);
-				amrex::Array4<int const> m = (lev < finest) ? mask[lev].const_array(iter) : amrex::Array4<int const>{};
-				const auto lo = amrex::lbound(bx);
-				const auto hi = amrex::ubound(bx);
-				for (int k = lo.z; k <= hi.z; ++k) {
-					for (int j = lo.y; j <= hi.y; ++j) {
-						for (int i = lo.x; i <= hi.x; ++i) {
-							if (is_covered(lev, m, i, j, k)) {
-								continue;
-							}
-							const Real rho = state(i, j, k, HydroSystem<PDRTest>::density_index);
-							const Real nH2 = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 3) / spmasses[3];
-							const Real nCO = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 9) / spmasses[9];
-							const Real nC = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 7) / spmasses[7];
-							static_cast<void>(rho);
-							// H-nucleus density (H + H+ + 2 H2 + 2 H2+ + HCO+ + CH + OH + 3 H3+)
-							const Real nH0 = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 0) / spmasses[0];
-							const Real nHp = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 1) / spmasses[1];
-							const Real nH2p = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 4) / spmasses[4];
-							const Real nHCOp = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 10) / spmasses[10];
-							const Real nCH = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 14) / spmasses[14];
-							const Real nOH = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 15) / spmasses[15];
-							const Real nH3p = state(i, j, k, HydroSystem<PDRTest>::scalar0_index + 16) / spmasses[16];
-							const Real nH_nuc = nH0 + nHp + 2.0 * nH2 + 2.0 * nH2p + nHCOp + nCH + nOH + 3.0 * nH3p;
+				amrex::Array4<int const> m = has_mask ? mask[lev].const_array(iter) : amrex::Array4<int const>{};
 
-							// column seen by this cell = material in front + half of itself
-							ncol(i, j, k, ncol_comp::H2) = cH2 + 0.5 * nH2 * dxlev;
-							ncol(i, j, k, ncol_comp::CO) = cCO + 0.5 * nCO * dxlev;
-							ncol(i, j, k, ncol_comp::C) = cC + 0.5 * nC * dxlev;
-							ncol(i, j, k, ncol_comp::H) = cH + 0.5 * nH_nuc * dxlev;
-
-							cH2 += nH2 * dxlev;
-							cCO += nCO * dxlev;
-							cC += nC * dxlev;
-							cH += nH_nuc * dxlev;
-						}
-					}
+				for (int c = 0; c < ncol_comp::n; ++c) {
+					// 1) per-cell contribution n_c*dx (covered cells contribute 0)
+					amrex::ParallelFor(n, [=] AMREX_GPU_DEVICE(int t) noexcept {
+						const int i = ilo + t;
+						const bool covered = (has_mask != 0) && (m(i, 0, 0) == 0);
+						pc[t] = covered ? 0.0 : column_ndens(state, i, c) * dxlev;
+					});
+					// 2) deterministic exclusive scan; retSum returns the level total for the carry
+					const Real total = amrex::Scan::ExclusiveSum(n, pc, pe, amrex::Scan::retSum);
+					// 3) N_c(i) = carry + exclScan + half-self cell
+					const Real carry_c = carry[c];
+					amrex::ParallelFor(n, [=] AMREX_GPU_DEVICE(int t) noexcept { ncol(ilo + t, 0, 0, c) = carry_c + pe[t] + 0.5 * pc[t]; });
+					carry[c] += total; // inter-level carry: serial over ~4 levels, deterministic order
 				}
 			}
 		}

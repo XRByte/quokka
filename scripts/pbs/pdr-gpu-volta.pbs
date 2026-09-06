@@ -1,0 +1,63 @@
+#!/bin/bash
+# PDR on Gadi gpuvolta (Tesla V100, sm_70) -- single rank + single GPU.
+#
+# ONE GPU / ONE rank only: the Phase-1 shielding-column sweep (testPDR.cpp) is a
+# whole-grid serial scan with no cross-rank reduction, so multiple ranks/GPUs give
+# wrong shielding. The GPU parallelizes cells within the rank (the burn) -- that is
+# the speedup. To run MANY parameter sets, submit one job each (they schedule onto
+# separate GPUs independently); each writes its own $RUNDIR so profile.txt never
+# clobbers across runs.
+#
+# Per-run knobs via qsub -v:  NH (n_H, cm^-3), CHI (FUV strength), STOP (stop_time s)
+#   qsub -v NH=100,CHI=1,STOP=2e14 scripts/pbs/pdr-gpu-volta.pbs
+
+#PBS -N pdr-volta
+#PBS -P jh2
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=90GB
+#PBS -l walltime=4:00:00
+#PBS -l storage=scratch/jh2+gdata/jh2
+#PBS -l jobfs=100GB
+#PBS -l wd
+#PBS -m aeb
+
+set -euo pipefail
+
+# ---- paths (EDIT if needed) ---------------------------------------------------
+REPO=/home/148/as3697/quokka/jaff-pdr
+RUNROOT=/scratch/jh2/as3697/pdr_runs
+# ------------------------------------------------------------------------------
+
+# per-run parameters (defaults if -v not given)
+NH="${NH:-1000}"
+CHI="${CHI:-1}"
+STOP="${STOP:-2e15}"
+
+BIN="$REPO/build/1d-cuda-volta/src/problems/PDR/PDR"
+INPUT="$REPO/inputs/PDR.toml"
+TABLE="$REPO/src/networks/GOW/gow_cooling_tables.hdf5"
+
+source "$REPO/scripts/hpc_profiles/gadi_volta.profile"
+
+# unique run dir per parameter set -> no profile.txt clobber between concurrent jobs
+RUNDIR="$RUNROOT/n${NH}_chi${CHI}"
+mkdir -p "$RUNDIR"
+cd "$RUNDIR"
+cp -f "$TABLE" ./gow_cooling_tables.hdf5
+
+# incident band-0 energy density for this chi (8.94e-14 = Draine chi=1)
+ERAD0=$(awk -v c="$CHI" 'BEGIN{printf "%.6e", 8.94e-14 * c}')
+
+echo ">>> host=$(hostname) rundir=$RUNDIR  n_H=$NH chi=$CHI stop=$STOP"
+nvidia-smi -L || true
+
+# 1 rank, 1 GPU. Burn parallelizes over cells on the device.
+mpirun -np 1 --map-by numa:SPAN --bind-to numa --mca pml ucx \
+    "$BIN" "$INPUT" \
+    amrex.the_arena_is_managed=1 \
+    pdr.ninit="$NH" pdr.Erad_inc_0="$ERAD0" pdr.stop_time="$STOP" \
+    amrex.abort_on_unused_inputs=0 >quokka.log 2>&1
+
+echo ">>> done: $RUNDIR/pdr_State/profile.txt"

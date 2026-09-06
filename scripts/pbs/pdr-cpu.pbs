@@ -1,0 +1,83 @@
+#!/bin/bash
+# PDR (1-D photodissociation region) on Gadi -- CPU, single MPI rank + OpenMP.
+#
+# WHY 1 rank: the shielding-column sweep in computeAfterTimestep (testPDR.cpp
+# Phase 1) accumulates cumulative columns across the WHOLE composite grid on one
+# rank with NO cross-rank reduction. Splitting the domain over MPI ranks gives
+# each rank only its own boxes -> wrong shielding -> wrong chemistry. Parallelism
+# comes from OpenMP (Phase-2 burn is thread-parallel), so use many CPUs, one rank.
+#
+# The GOW table 'gow_cooling_tables.hdf5' is read by a HARDCODED RELATIVE name from
+# the run directory (gow_tables.cpp) -- it is staged into $RUNDIR below. Output
+# pdr_State/profile.txt is written (rank 0) relative to $RUNDIR.
+#
+# Per-run knobs via qsub -v:  NH (n_H, cm^-3), CHI (FUV strength), STOP (stop_time s)
+#   qsub -v NH=100,CHI=1,STOP=2e14 scripts/pbs/pdr-cpu.pbs
+# Each run gets its own $RUNDIR -> submit many concurrently, no profile.txt clobber.
+
+#PBS -N pdr-cpu
+#PBS -P jh2
+#PBS -q normal
+#PBS -l ncpus=48
+#PBS -l mem=190GB
+#PBS -l walltime=36:00:00
+#PBS -l storage=scratch/jh2+gdata/jh2
+#PBS -l wd
+#PBS -m aeb
+
+set -euo pipefail
+
+# ---- paths (EDIT if needed) ---------------------------------------------------
+REPO=/home/148/as3697/quokka/jaff-pdr
+RUNROOT=/scratch/jh2/as3697/pdr_runs_cpu
+# ------------------------------------------------------------------------------
+
+# per-run parameters (defaults if -v not given)
+NH="${NH:-1000}"
+CHI="${CHI:-1}"
+STOP="${STOP:-2e14}"
+
+BIN="$REPO/build/1d/src/problems/PDR/PDR"
+INPUT="$REPO/inputs/PDR.toml"
+TABLE="$REPO/src/networks/GOW/gow_cooling_tables.hdf5"
+
+# environment (same modules the build used)
+source "$REPO/scripts/hpc_profiles/gadi_hopper.profile"
+
+# unique run dir per parameter set -> concurrent jobs never collide
+RUNDIR="$RUNROOT/n${NH}_chi${CHI}"
+mkdir -p "$RUNDIR"
+cd "$RUNDIR"
+cp -f "$TABLE" ./gow_cooling_tables.hdf5
+
+# incident band-0 energy density for this chi (8.94e-14 = Draine chi=1)
+ERAD0=$(awk -v c="$CHI" 'BEGIN{printf "%.6e", 8.94e-14 * c}')
+
+# checkpoint every 20% of the run (time-based) -> 5 checkpoints over [0, stop_time].
+# testPDR.cpp only overrides checkpointInterval_ (step-based), NOT the time interval,
+# so this command-line value takes effect.
+CHKINT=$(awk -v s="$STOP" 'BEGIN{printf "%.6e", 0.2 * s}')
+
+# auto-restart: if this $RUNDIR already holds checkpoints (e.g. a previous job hit
+# walltime), resume from the newest one instead of starting over. Resubmit to continue.
+RESTART_ARG=""
+LATEST_CHK=$(ls -d "$RUNDIR"/chk* 2>/dev/null | sort -V | tail -1 || true)
+if [[ -n "$LATEST_CHK" ]]; then
+	RESTART_ARG="restartfile=$(basename "$LATEST_CHK")"
+	echo ">>> resuming from $LATEST_CHK"
+fi
+
+# all cores go to OpenMP threads on the single rank
+export OMP_NUM_THREADS="$PBS_NCPUS"
+export OMP_PROC_BIND=spread
+export OMP_PLACES=cores
+
+echo ">>> host=$(hostname) rundir=$RUNDIR threads=$OMP_NUM_THREADS  n_H=$NH chi=$CHI stop=$STOP chkint=$CHKINT"
+
+# 1 MPI rank, $OMP_NUM_THREADS threads.
+mpirun -np 1 --bind-to none "$BIN" "$INPUT" \
+	pdr.ninit="$NH" pdr.Erad_inc_0="$ERAD0" pdr.stop_time="$STOP" \
+	checkpointtime_interval="$CHKINT" $RESTART_ARG \
+	amrex.abort_on_unused_inputs=0 > quokka.log 2>&1
+
+echo ">>> done: $RUNDIR/pdr_State/profile.txt   log: $RUNDIR/quokka.log"

@@ -1,0 +1,49 @@
+#!/bin/bash
+# PDR (1-D photodissociation region) on Gadi -- GPU, single rank + single GPU.
+#
+# The per-cell chemistry burn (testPDR.cpp Phase 2) runs as a device ParallelFor
+# (columns delivered via burn_t::aux -> device-safe). ONE GPU / ONE rank only: the
+# Phase-1 shielding-column accumulator is a whole-grid serial scan with no
+# cross-rank reduction, so multiple ranks (=multiple GPUs) give wrong shielding.
+# The GPU parallelizes cells within the rank; that is the speedup.
+#
+# gow_cooling_tables.hdf5 is read by hardcoded relative name from CWD -> staged
+# into $RUNDIR below. Output pdr_State/profile.txt is written relative to CWD.
+
+#PBS -N pdr-gpu
+#PBS -P jh2
+#PBS -q gpuhopper
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=250GB
+#PBS -l walltime=4:00:00
+#PBS -l storage=scratch/jh2
+#PBS -l jobfs=100GB
+#PBS -l wd
+#PBS -m aeb
+
+set -euo pipefail
+
+# ---- paths (EDIT if needed) ---------------------------------------------------
+REPO=/home/148/as3697/quokka/jaff-pdr  # repo root on Gadi
+RUNDIR=/scratch/jh2/as3697/pdr_run_gpu # run + output directory
+# ------------------------------------------------------------------------------
+
+BIN="$REPO/build/1d-cuda/src/problems/PDR/PDR"
+INPUT="$REPO/inputs/PDR.toml"
+TABLE="$REPO/src/networks/GOW/gow_cooling_tables.hdf5"
+
+source "$REPO/scripts/hpc_profiles/gadi_hopper.profile"
+export OMPI_CXX=g++ OMPI_CC=gcc
+
+mkdir -p "$RUNDIR"
+cd "$RUNDIR"
+cp -f "$TABLE" ./gow_cooling_tables.hdf5
+
+echo ">>> host=$(hostname) rundir=$RUNDIR"
+nvidia-smi -L || true
+
+# 1 rank, 1 GPU. The burn parallelizes over cells on the device.
+mpirun -np 1 "$BIN" "$INPUT" >quokka.log 2>&1
+
+echo ">>> done. output: $RUNDIR/pdr_State/profile.txt   log: $RUNDIR/quokka.log"
