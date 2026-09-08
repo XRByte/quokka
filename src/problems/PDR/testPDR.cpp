@@ -455,10 +455,27 @@ template <> void QuokkaSimulation<PDRTest>::computeAfterTimestep()
 						const bool covered = (has_mask != 0) && (m(i, 0, 0) == 0);
 						pc[t] = covered ? 0.0 : column_ndens(state, i, c) * dxlev;
 					});
-					// 2) deterministic exclusive scan; retSum returns the level total for the carry
-					const Real total = amrex::Scan::ExclusiveSum(n, pc, pe, amrex::Scan::retSum);
-					// 3) N_c(i) = carry + exclScan + half-self cell
+					// 2) exclusive prefix sum of pc -> pe, plus the level total for the inter-level carry.
 					const Real carry_c = carry[c];
+					Real total = 0.0;
+#ifdef AMREX_USE_GPU
+					// GPU: amrex::Scan (CUB/rocPRIM) accumulates in the element type -> correct.
+					total = amrex::Scan::ExclusiveSum(n, pc, pe, amrex::Scan::retSum);
+#else
+					// CPU: amrex::Scan::ExclusiveSum's host path is std::exclusive_scan(in,in+n,out,0),
+					// whose accumulator takes the type of the literal `0` (int); the ~1e18 column
+					// contributions overflow it to INT_MIN and the prefix comes back garbage. Build the
+					// exclusive prefix explicitly in Real instead (1-D single box, deterministic).
+					{
+						Real running = 0.0;
+						for (int t = 0; t < n; ++t) {
+							pe[t] = running;
+							running += pc[t];
+						}
+						total = running;
+					}
+#endif
+					// 3) N_c(i) = carry + exclScan + half-self cell
 					amrex::ParallelFor(n, [=] AMREX_GPU_DEVICE(int t) noexcept { ncol(ilo + t, 0, 0, c) = carry_c + pe[t] + 0.5 * pc[t]; });
 					carry[c] += total; // inter-level carry: serial over ~4 levels, deterministic order
 				}
