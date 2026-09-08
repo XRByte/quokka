@@ -78,7 +78,7 @@ template <> struct Physics_Traits<PDRTest> : DefaultPhysicsTraits {
 	static constexpr bool is_radiation_enabled = true;	     // evolve the FUV photon field
 	static constexpr int numMassScalars = NumSpec;		     // 18 chemical species
 	static constexpr int numPassiveScalars = numMassScalars + 0; // only mass scalars
-	static constexpr int nGroups = 1;			     // single chemistry-active FUV band (must equal NumChemBands)
+	static constexpr int nGroups = 2;			     // FUV bands: 6-11.2, 11.2-13.6 eV (must equal NumChemBands)
 };
 
 template <> struct RadSystem_Traits<PDRTest> {
@@ -95,10 +95,15 @@ template <> struct RadSystem_Traits<PDRTest> {
 	// registry entry CHEM_BANDS), so a boundary times energy_unit is the photon energy in erg:
 	// energy_unit = ev2erg.
 	static constexpr double energy_unit = C::ev2erg;
-	// Single chemistry band (nGroups == 1): use the single-group opacity path. Transport
-	// opacity is zero -- continuum + line absorption are baked into the network radiation
-	// terms and applied in the chemistry burn (ComputePlanckOpacity returns g_kappa_dust = 0).
-	static constexpr OpacityModel opacity_model = OpacityModel::single_group;
+	// Two chemistry-active FUV groups (nGroups == 2): 6-11.2 and 11.2-13.6 eV. The radiation
+	// transport group edges coincide with the chemistry band edges (every group is a chem band),
+	// given in eV (times energy_unit -> erg). No thermal emission into these bands (frozen gas,
+	// beta_order = 0), so the edges are the exact band edges, not padded to 0/inf.
+	static constexpr amrex::GpuArray<double, Physics_Traits<PDRTest>::nGroups + 1> radBoundaries{6.0, 11.2, 13.6};
+	// nGroups > 1 forbids single_group. Transport opacity is zero in every group -- continuum +
+	// line absorption are baked into the network radiation terms and applied in the chemistry burn
+	// (DefineOpacityExponentsAndLowerValues returns all-zero opacities below).
+	static constexpr OpacityModel opacity_model = OpacityModel::piecewise_constant_opacity;
 	static constexpr auto ChemBands() { return ChemBandsHeader_; }
 	// photon-number spectrum index within the band (jaff network.radiation.power_law_index = 0)
 	static constexpr auto ChemBandsPowerLawIndex() { return ChemBandsPowerLawIndex_; }
@@ -200,12 +205,16 @@ template <> void QuokkaSimulation<PDRTest>::preCalculateInitialConditions()
 	    1.0e-40,	  // O+
 	};
 
-	// Incident FUV field, per band (erg cm^-3). Single chemistry band (nGroups == 1) is
-	// the 6-13.6 eV FUV band: put the Draine (chi=1) energy density in band 0. Overridable
-	// from the input (Erad_inc_0) -- the incident-spectrum calibration knob.
-	const amrex::Real u_FUV_draine = 8.94e-14; // Draine (1978) 6-13.6 eV energy density, chi=1
-	g_Erad_inc[0] = u_FUV_draine;
-	g_Erad_inc[1] = 0.0;
+	// Incident FUV field, per band (erg cm^-3). The two bands (6-11.2, 11.2-13.6 eV) split the
+	// Draine (chi=1) 6-13.6 eV energy density 8.94e-14 by the energy-density fraction of the
+	// Draine (1978) spectrum n(E) = 1.658e6 E - 2.152e5 E^2 + 6.919e3 E^3 [photons cm^-3 eV^-1]:
+	// integral of E*n(E) gives 0.852 in 6-11.2 eV and 0.148 in 11.2-13.6 eV. Each band is
+	// overridable from the input (Erad_inc_0, Erad_inc_1) -- the incident-spectrum calibration knobs.
+	const amrex::Real u_FUV_draine = 8.94e-14;	    // Draine (1978) 6-13.6 eV energy density, chi=1
+	constexpr amrex::Real frac_band0 = 0.852;	    // 6-11.2 eV energy-density fraction
+	constexpr amrex::Real frac_band1 = 0.148;	    // 11.2-13.6 eV energy-density fraction
+	g_Erad_inc[0] = frac_band0 * u_FUV_draine;	    // 6-11.2 eV
+	g_Erad_inc[1] = frac_band1 * u_FUV_draine;	    // 11.2-13.6 eV
 	g_Erad_inc[2] = 0.0;
 	pp.query("Erad_inc_0", g_Erad_inc[0]);
 	pp.query("Erad_inc_1", g_Erad_inc[1]);
@@ -240,17 +249,22 @@ template <> void QuokkaSimulation<PDRTest>::preCalculateInitialConditions()
 	network_init();
 }
 
-// No transport opacity: continuum + line absorption are baked into the network
-// radiation terms and applied in the chemistry burn, so the single-group transport
-// opacity is g_kappa_dust (= 0). Flux- and energy-mean opacities default to the Planck value.
-template <> AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE auto RadSystem<PDRTest>::ComputePlanckOpacity(const double /*rho*/, const double /*Tgas*/) -> Real
+// No transport opacity in any group: continuum + line absorption are baked into the network
+// radiation terms and applied in the chemistry burn. With nGroups > 1 the group opacities come
+// from DefineOpacityExponentsAndLowerValues (piecewise_constant_opacity model); every group is
+// left transparent (exponent 0, opacity 0). The scalar ComputePlanckOpacity/ComputeFluxMeanOpacity
+// are only consulted by the single-group solver and are unused here.
+template <>
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE auto
+RadSystem<PDRTest>::DefineOpacityExponentsAndLowerValues(amrex::GpuArray<double, nGroups_ + 1> /*rad_boundaries*/, const double /*rho*/,
+							 const double /*Tgas*/) -> amrex::GpuArray<amrex::GpuArray<double, nGroups_ + 1>, 2>
 {
-	return g_kappa_dust;
-}
-
-template <> AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE auto RadSystem<PDRTest>::ComputeFluxMeanOpacity(const double rho, const double Tgas) -> Real
-{
-	return ComputePlanckOpacity(rho, Tgas);
+	amrex::GpuArray<amrex::GpuArray<double, nGroups_ + 1>, 2> exponents_and_values{};
+	for (int i = 0; i < nGroups_ + 1; ++i) {
+		exponents_and_values[0][i] = 0.0; // spectral exponent
+		exponents_and_values[1][i] = 0.0; // group opacity (transparent)
+	}
+	return exponents_and_values;
 }
 
 // One-sided illumination: a fixed incident radiation field enters at the lo-x face
@@ -758,7 +772,12 @@ auto problem_main() -> int
 
 		std::filesystem::create_directories("pdr_State");
 		std::ofstream out("pdr_State/profile.txt");
-		out << "x Tgas Erad0 Erad1 Erad2 H Hp e H2 H2p He Hep C Cp CO HCOp O Si Sip CH OH H3p Op\n";
+		// header must match the column layout: x, Tgas, one Erad<g> per radiation band, then species
+		out << "x Tgas";
+		for (int g = 0; g < Physics_Traits<PDRTest>::nGroups; ++g) {
+			out << " Erad" << g;
+		}
+		out << " H Hp e H2 H2p He Hep C Cp CO HCOp O Si Sip CH OH H3p Op\n";
 		for (auto const &row : rows) {
 			for (int c = 0; c < nCols; ++c) {
 				out << (c == 0 ? "" : " ") << row[c];

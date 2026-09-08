@@ -54,10 +54,11 @@ endforeach()
 # shipped verbatim in src/networks/GOW. Uses the dedicated EOS/GOW multigamma EOS
 # (per-species masses/gammas for all 18 species). Consumed by the PDR problem.
 #
-# Radiation: single chemistry-active FUV band. CHEM_BANDS is in eV (jaff native
-# unit): [6.0, 13.6] eV == the Draine 6-13.6 eV FUV band (was 1.4506e15-3.288e15 Hz
-# in the source). The RHS reads the per-cell photon field via state.rn[]/state.c_hat
-# (2 vars per group -> do NOT build with SKIP_PHOTOCHEMFLUX).
+# Radiation: two chemistry-active FUV bands. CHEM_BANDS is in eV (jaff native unit):
+# [6.0, 11.2, 13.6] eV -> band 0 = 6-11.2 eV, band 1 = 11.2-13.6 eV (Lyman-Werner H2
+# dissociation + C photoionization, 11.26 eV threshold). The RHS reads the per-cell
+# photon field via state.rn[]/state.c_hat (2 vars per group, interleaved as
+# rn[2*g]=eden, rn[2*g+1]=flux -> do NOT build with SKIP_PHOTOCHEMFLUX).
 #
 # Self-shielding columns ncol_{H2,CO,C,H} are delivered per-cell via burn_t::aux[0..3];
 # the PDR problem builds with -DNAUX_NET=4 and -DPDR_PARALLEL_NCOL_AUX.
@@ -83,7 +84,7 @@ register_microphysics_network(GOW
   ZION "0.0, 1.0, -1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0"
   AION_CONSTEXPR "case H: a = 1.008| break| case Hp: a = 1.008| break| case Elec: a = 5.48579909e-4| break| case H2: a = 2.016| break| case H2p: a = 2.016| break| case He: a = 4.002602| break| case Hep: a = 4.002602| break| case Carbon: a = 12.011| break| case Cp: a = 12.011| break| case CO: a = 28.010| break| case HCOp: a = 29.018| break| case O: a = 15.999| break| case Si: a = 28.085| break| case Sip: a = 28.085| break| case CH: a = 13.019| break| case OH: a = 17.007| break| case H3p: a = 3.024| break| case Op: a = 15.999| break|"
   ZION_CONSTEXPR "case H: z = 0.0| break| case Hp: z = 1.0| break| case Elec: z = -1.0| break| case H2: z = 0.0| break| case H2p: z = 1.0| break| case He: z = 0.0| break| case Hep: z = 1.0| break| case Carbon: z = 0.0| break| case Cp: z = 1.0| break| case CO: z = 0.0| break| case HCOp: z = 1.0| break| case O: z = 0.0| break| case Si: z = 0.0| break| case Sip: z = 1.0| break| case CH: z = 0.0| break| case OH: z = 0.0| break| case H3p: z = 1.0| break| case Op: z = 1.0| break|"
-  NUM_CHEM_BANDS 1
-  CHEM_BANDS "6.0, 13.6" # eV (single 6-13.6 eV Draine FUV band)
+  NUM_CHEM_BANDS 2
+  CHEM_BANDS "6.0, 11.2, 13.6" # eV (two FUV bands: 6-11.2 and 11.2-13.6 [Lyman-Werner + C ionization])
   POWER_LAW_INDEX 0
 )
