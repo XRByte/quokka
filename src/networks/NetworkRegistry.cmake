@@ -20,15 +20,15 @@ set(_pi_hand_written_species_args
 )
 
 foreach(_pi_name photoionization_H_caseB photoionization_H_caseB_handwritten)
-  set(_pi_is_jaff FALSE)
-  set(_pi_species_args "")
-  if (_pi_name STREQUAL "photoionization_H_caseB")
-    set(_pi_is_jaff TRUE)
-  else()
-    set(_pi_species_args ${_pi_hand_written_species_args})
-  endif()
+    set(_pi_is_jaff FALSE)
+    set(_pi_species_args "")
+    if (_pi_name STREQUAL "photoionization_H_caseB")
+        set(_pi_is_jaff TRUE)
+    else()
+        set(_pi_species_args ${_pi_hand_written_species_args})
+    endif()
 
-  register_microphysics_network(${_pi_name}
+    register_microphysics_network(${_pi_name}
     EOSDIR            "photoionization"
     EOSPARAMFILE      "${CMAKE_SOURCE_DIR}/extern/Microphysics/EOS/photoionization/_parameters"
     # No PARAMFILE: only read when UNIT_TEST_GATE is ON, and no problem in this
@@ -87,4 +87,31 @@ register_microphysics_network(GOW
   NUM_CHEM_BANDS 2
   CHEM_BANDS "6.0, 11.2, 13.6" # eV (two FUV bands: 6-11.2 and 11.2-13.6 [Lyman-Werner + C ionization])
   POWER_LAW_INDEX 0
+)
+
+# ---------------------------------------------------------------------------
+# GOW_nr: radiation-free variant of the GOW network
+register_microphysics_network(GOW_nr
+  EOSDIR            "GOW"
+  EOSPARAMFILE      "${CMAKE_SOURCE_DIR}/extern/Microphysics/EOS/GOW/_parameters"
+  NETWORKPARAMFILE  "${CMAKE_SOURCE_DIR}/src/networks/GOW_nr/_parameters"
+  HAS_NET_FILE      FALSE
+  IS_JAFF           FALSE
+  USES_INTEGRATOR_DIRS TRUE
+  EXTRA_SOURCES     "${CMAKE_SOURCE_DIR}/extern/Microphysics/interfaces/eos_data.cpp"
+                    "${CMAKE_SOURCE_DIR}/extern/Microphysics/interfaces/network_initialization.cpp"
+                    "${CMAKE_SOURCE_DIR}/extern/Microphysics/EOS/GOW/actual_eos_data.cpp"
+                    "${CMAKE_SOURCE_DIR}/src/networks/GOW_nr/actual_network_data.cpp"
+                    "${CMAKE_SOURCE_DIR}/src/networks/GOW_nr/gow_tables.cpp"
+  NETWORK_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/src/networks/GOW_nr"
+                        "${CMAKE_SOURCE_DIR}/extern/Microphysics/networks"
+  NSPEC ${GOW_NSPEC}
+  SPECIES_ENUM "${GOW_SPECIES_ENUM}"
+  SPEC_NAMES "${GOW_SPEC_NAMES}"
+  SHORT_SPEC_NAMES "${GOW_SHORT_SPEC_NAMES}"
+  AION "${GOW_AION}"
+  AION_INV "${GOW_AION_INV}"
+  ZION "${GOW_ZION}"
+  AION_CONSTEXPR "${GOW_AION_CONSTEXPR}"
+  ZION_CONSTEXPR "${GOW_ZION_CONSTEXPR}"
 )

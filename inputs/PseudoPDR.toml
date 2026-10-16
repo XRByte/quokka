@@ -1,0 +1,112 @@
+# *****************************************************************
+# 1-D "pseudo" PDR (Av-sweep) using the Gong, Ostriker & Wolfire (2017)
+# gow17 chemistry + thermal network (18 species). Each cell is an independent
+# one-zone chemistry/thermal problem at a FIXED gas density n_H, laid out on a
+# log-spaced column-density (N_H) grid. The FUV field is a constant Draine field
+# chi attenuated by the per-cell dust visual extinction Av (chi*exp(-gamma*Av)
+# in the network photorates). This is NOT radiation transport -- no photon field
+# is evolved. The isotropic 60-deg source is emulated by evaluating Av at
+# iso_factor*N_H (see src/problems/PseudoPDR/readme.md).
+#
+# NOTE: self-shielding (H2/CO/C) is NOT included -- the fixed GOW RHS exposes
+# only dust attenuation (single Av feeding all photorates).
+# *****************************************************************
+
+# *****************************************************************
+# Problem size and geometry
+# *****************************************************************
+geometry.prob_lo = 0.0 0.0 0.0
+# The gas is spatially uniform in density; each cell does independent chemistry.
+# The box is made very large so the hydro CFL limit sits far above the chemistry
+# timescale; the stiff burner sub-cycles the network to equilibrium within each
+# (large) hydro step. Hydro cannot be disabled because the chemistry burner reads
+# the gas density/energy/scalars, which only exist when hydro is enabled.
+geometry.prob_hi = 1.0e30 1.0e30 1.0e30
+quokka.bc = foextrap foextrap foextrap
+
+# *****************************************************************
+# VERBOSITY
+# *****************************************************************
+amr.v = 0
+
+# *****************************************************************
+# Resolution and refinement
+# *****************************************************************
+# ngrid = 1000 cells along x, log-spaced in N_H (only x matters in 1-D).
+amr.n_cell = 1000 1 1
+amr.max_level = 0
+amr.blocking_factor = 1
+amr.max_grid_size = 1024
+
+do_reflux = 0
+do_subcycle = 0
+
+# Start from a small dt; Quokka ramps dt up (1.1x/step cap) until it reaches the
+# final time (7e20 s). A SMALL first dt is REQUIRED: the first burn must stay
+# below the fast chemical/thermal transient (~1e3 s). A large first dt (e.g. 1e6)
+# makes a single burn step jump through the transient and overshoot the thermal
+# equilibrium (T~33 K surface) down into the small_temp floor, after which the
+# floored T/e are inconsistent and every subsequent burn fails with istate=-6.
+# The per-zone chemistry burn sub-cycles itself to equilibrium internally
+# (growing sub-step, see computeAfterTimestep), so the whole slab is solved in a
+# SINGLE hydro step. Take one big step straight to stopTime; the hydro state is
+# static (v=0) so the step itself does nothing but trigger the chemistry.
+initial_dt = 7.0e20
+
+amrex.signal_handling = 0
+
+# *****************************************************************
+# Chemistry
+# *****************************************************************
+# The built-in parallel chemistry burner (which shares one global Av across all
+# cells) is DISABLED. PseudoPDR runs its own serial per-cell burn in
+# computeAfterTimestep so each cell gets its own dust attenuation Av.
+chemistry.enabled = 0
+
+pdr.temperature = 1.0e2   # K, initial (T solved self-consistently)
+pdr.ninit       = 100.0  # fixed gas number density n_H (cm^-3)
+pdr.small_temp  = 3.0
+pdr.small_dens  = 1.0e-60
+
+# Column-density (Av) sweep grid (Zd = 1)
+pdr.NH_min     = 1.0e17   # surface column density (Av ~ 5.3e-5)
+pdr.NH_total   = 1.87e22  # deepest column density (Av = 10)
+pdr.NH_over_Av = 1.87e21  # N_H per unit Av at Zd=1
+pdr.iso_factor = 2.0      # isotropic 60-deg incidence: Av evaluated at 2*N_H
+
+# *****************************************************************
+# Network (GOW) runtime parameters
+# *****************************************************************
+network.chi            = 1.0     # FUV field (Draine units)
+network.Av             = 0.0     # placeholder; overwritten per-cell at runtime
+network.crate          = 2.0e-16 # cosmic-ray ionization rate (s^-1)
+network.dust2gas_ratio = 0.01    # Zd = 1 at 0.01 (solar)
+network.metallicity    = 1.0
+network.redshift       = 0.0
+network.small_x        = 1.0e-60
+
+# *****************************************************************
+# Integrator (Microphysics VODE) runtime parameters
+# *****************************************************************
+integrator.use_number_densities = 1
+# evolve the internal energy (non-isothermal): recompute T from e in the RHS
+integrator.call_eos_in_rhs = 1
+integrator.subtract_internal_energy = 0
+integrator.do_species_clip = 0
+integrator.SMALL_X_SAFE = 1e-60
+integrator.burner_verbose = 0
+integrator.use_jacobian_caching = 0
+integrator.X_reject_buffer = 1e100
+integrator.jacobian = 1
+integrator.renormalize_abundances = 0
+# stiff cold-molecular zones need many BDF steps to reach equilibrium in one
+# burn (readme.md uses 5e6); the default 150000 stops unconverged and drifts
+# the elemental (carbon) budget at the H/H2 + C+/CO transition.
+integrator.ode_max_steps = 5000000
+# tolerances (ppdr_setup.md: reltol = 1e-4). Tighter (1e-7) makes VODE take
+# millions of steps on the stiff cold-molecular zones and hit ode_max_steps
+# (istate = -4), which both fails the burn and makes the run crawl.
+integrator.rtol_spec = 1.0e-9
+integrator.atol_spec = 1.0e-11
+integrator.rtol_enuc = 1.0e-9
+integrator.atol_enuc = 1.0e-11
