@@ -2,7 +2,7 @@
 # Problem size and geometry
 # *****************************************************************
 geometry.prob_lo = [0.0, 0.0, 0.0]
-geometry.prob_hi = [1.0, 1.0, 1.0]
+geometry.prob_hi = [1.542839e20, 1.542839e20, 1.542839e20]  # 50 pc [cm]
 geometry.is_periodic = [1, 1, 1]
 
 # *****************************************************************
@@ -15,26 +15,87 @@ amr.v = 0  # verbosity in Amr
 # *****************************************************************
 amr.n_cell = [32, 32, 32]
 amr.max_level = 0  # number of levels = max_level + 1
-amr.blocking_factor = 32  # grid size must be divisible by this
-amr.max_grid_size = 128  # at least 128 for GPUs
+amr.blocking_factor = 16  # grid size must be divisible by this
+amr.max_grid_size = 16  # at least 128 for GPUs
 
-stop_time = 10
+stop_time = 1.1571294e+16  # 6 T: 2 T hydro spin-up + 4 T chemistry; T = L / (2 target_vdisp) = 1.9285e+15 s [s]
 plotfile_interval = -1
-max_timesteps = 2000
+plottime_interval = 9.642745e+14  # 0.5 T: snapshots at t_chem + 0.5 T, 1 T, ...; written at the first step past each multiple [s]
+max_timesteps = 10000000  # stop_time governs
+checkpoint_interval = 500  # restart with: restartfile=chk<step>
+print_cycle_timing = 1
 
 do_reflux = 0
 do_subcycle = 0
 hydro.artificial_viscosity_coefficient = 0.1
 
 turbulence.enabled = 1
-turbulence.length = 1.0
-turbulence.target_vdisp = 0.2
+turbulence.remove_mean_flow = 1
+turbulence.length = 1.542839e20  # driving box size = 50 pc [cm]
+turbulence.target_vdisp = 4.0e4  # 3D dispersion for Mach 5 at 10 K, gamma=5/3, mu=2.33 [cm/s]
 turbulence.ampl_factor = 0.2
 turbulence.ampl_auto_adjust = 1
 turbulence.k_driv = 2.0
 turbulence.k_min = 2.0
 turbulence.k_max = 3.0
-turbulence.sol_weight = 0.5
+turbulence.sol_weight = 0
 turbulence.spect_form = 1
 turbulence.random_seed = 140281
 turbulence.nsteps_per_t_turb = 10
+
+# *****************************************************************
+# Chemistry: GOW_nr (Gong, Ostriker & Wolfire 2017) 18 species + thermal
+# *****************************************************************
+# The built-in burner reads the single global network_rp::Av, so it is OFF; the
+# problem runs its own per-cell burn (addStrangSplitSources) with local
+# Jeans-length shielding columns + Av passed through burn_t::aux.
+chemistry.enabled = 0
+
+turbchem.nH = 30.0  # initial H-nucleus number density [cm^-3]
+turbchem.chem_start_time = 3.857098e+15  # 2 T hydro-only spin-up before chemistry switches on [s]
+turbchem.T0 = 100.0  # initial gas temperature [K]
+turbchem.T_cap = 40.0  # T cap in the Jeans shielding length (Safranek-Shrader+17 L1a) [K]
+turbchem.NH_over_Av = 1.87e21  # N_H per unit Av (Zd = 1) [cm^-2]
+turbchem.small_temp = 1.0e1
+turbchem.small_dens = 1.0e-60
+
+# *****************************************************************
+# Network (GOW_nr) runtime parameters
+# *****************************************************************
+network.chi = 1.0  # FUV field (Draine units)
+network.Av = 0.0  # unused: Av is set per cell via burn_t::aux[4]
+network.crate = 2.0e-16  # cosmic-ray ionization rate (s^-1)
+network.dust2gas_ratio = 0.01  # Zd = 1 at 0.01 (solar)
+network.metallicity = 1.0
+network.redshift = 0.0
+network.small_x = 1.0e-60
+
+# *****************************************************************
+# Integrator (Microphysics Rosenbrock) runtime parameters, as in inputs/PDR.toml
+# *****************************************************************
+# rosenbrock_tableau: 0 = rodas5p (5th order, L-stable), 1 = rodas4p, 2 = rodas3p, 3 = ros2s
+integrator.rosenbrock_tableau = 0
+integrator.use_number_densities = 1
+integrator.call_eos_in_rhs = 1
+integrator.subtract_internal_energy = 0
+integrator.do_species_clip = 0
+integrator.SMALL_X_SAFE = 1e-60
+integrator.burner_verbose = 0
+integrator.use_jacobian_caching = 1
+integrator.X_reject_buffer = 1e100
+integrator.jacobian = 1  # analytic GOW actual_jac
+integrator.renormalize_abundances = 0
+integrator.ode_max_steps = 5000000
+# retry a failed burn with a swapped Jacobian + looser tolerances before failing
+integrator.use_burn_retry = 1
+integrator.retry_swap_jacobian = 1
+integrator.retry_rtol_spec = 1.0e-4
+integrator.retry_atol_spec = 1.0e-8
+integrator.retry_rtol_enuc = 1.0e-4
+integrator.retry_atol_enuc = 1.0e-8
+# PDR uses atol_spec = 1e-6 cm^-3 (~1e-9 n_H at n_H = 1000); scaled here to ~1e-9 n_H
+# for n_H = 2 so trace species (CO, C) are still resolved
+integrator.rtol_spec = 1.0e-3
+integrator.atol_spec = 2.0e-9  # cm^-3
+integrator.rtol_enuc = 1.0e-3
+integrator.atol_enuc = 1.0e-6  # erg/g

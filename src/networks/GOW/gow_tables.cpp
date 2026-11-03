@@ -50,6 +50,21 @@ auto makeConstTables(bool device) -> GowGpuConstTables
 				 .c_shield = s_c_shield_table.const_tables_host(),
 				 .co_shield = s_co_shield_table.const_tables_host()};
 }
+
+// Free the table memory and the managed registry (run from amrex::Finalize()).
+void releaseGowTables()
+{
+	s_l0_table = {};
+	s_co_table = {};
+	s_dust_table = {};
+	s_c_shield_table = {};
+	s_co_shield_table = {};
+	if (g_gow_registry != nullptr) {
+		g_gow_registry->~GowTabulatedRegistry();
+		amrex::The_Managed_Arena()->free(g_gow_registry);
+		g_gow_registry = nullptr;
+	}
+}
 } // namespace
 
 void registerGowTables()
@@ -75,6 +90,11 @@ void registerGowTables()
 	}
 	g_gow_registry->host = makeConstTables(/*device=*/false);
 	g_gow_registry->device = makeConstTables(/*device=*/true);
+
+	// The tables own AMReX arena memory, so release them inside amrex::Finalize() while the
+	// arenas still exist. Left to static destruction at program exit, ~DataTable() would free
+	// through already-destroyed arenas ("pure virtual method called" abort).
+	amrex::ExecOnFinalize(releaseGowTables);
 }
 
 // NOTE: registerGowTables() must be called explicitly from problem_main() after
